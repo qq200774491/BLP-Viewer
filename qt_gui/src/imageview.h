@@ -43,4 +43,5 @@ private:
     bool fitMode_ = true;
     QWidget* overlay_ = nullptr;
     QColor backgroundColor_ = QColor(224, 228, 235);
+    bool useCheckerboard_ = true;
 };

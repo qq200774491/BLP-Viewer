@@ -70,8 +70,8 @@ private slots:
     void onPickPreviewBackground();
     void onResetPreviewBackground();
     void onAlignPow2();
+    void onCenterPow2();
     void onRestorePow2();
-    void onSavePow2();
 
 private:
     void setupUi();
@@ -85,6 +85,8 @@ private:
     void updateThumbnailAction();
     void updatePow2Overlay();
     void logMessage(const QString& message);
+    void refreshMipList(const QByteArray& bytes);
+    bool saveAlignedToSource(const QImage& image, QString* outError);
     QString buildOutputPath(const QString& inputPath, const QString& format, bool overwrite) const;
     QString normalizedFormat() const;
     void setInfoText(const ImageMeta& meta, int mipIndex);
@@ -117,8 +119,8 @@ private:
     QWidget* previewOverlay_ = nullptr;
     QWidget* pow2Panel_ = nullptr;
     QToolButton* pow2AlignButton_ = nullptr;
+    QToolButton* pow2CenterButton_ = nullptr;
     QToolButton* pow2RestoreButton_ = nullptr;
-    QToolButton* pow2SaveButton_ = nullptr;
     QToolButton* backgroundButton_ = nullptr;
 
     QSet<QString> fileSet_;
@@ -127,6 +129,9 @@ private:
     QImage previewOriginalImage_;
     QImage previewAdjustedImage_;
     QString currentPreviewPath_;
+    QByteArray originalFileBytes_;
+    ImageMeta originalMeta_;
+    bool hasOriginalBackup_ = false;
     bool previewAdjusted_ = false;
     bool currentIsBlp_ = false;
     int currentMipIndex_ = 0;

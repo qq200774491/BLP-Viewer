@@ -67,12 +67,14 @@ void ImageView::setBackgroundColor(const QColor& color) {
         return;
     }
     backgroundColor_ = color;
-    setBackgroundBrush(checkerboardBrush());
+    useCheckerboard_ = false;
+    setBackgroundBrush(QBrush(color));
     viewport()->update();
 }
 
 void ImageView::resetBackground() {
     backgroundColor_ = QColor(224, 228, 235);
+    useCheckerboard_ = true;
     setBackgroundBrush(checkerboardBrush());
     viewport()->update();
 }
@@ -135,6 +137,10 @@ void ImageView::updatePlaceholder() {
 }
 
 QBrush ImageView::checkerboardBrush() const {
+    if (!useCheckerboard_) {
+        return QBrush(backgroundColor_);
+    }
+
     const int tileSize = 16;
     QPixmap pixmap(tileSize * 2, tileSize * 2);
     const QColor lightColor = backgroundColor_.isValid()

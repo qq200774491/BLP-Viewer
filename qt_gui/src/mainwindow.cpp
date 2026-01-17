@@ -24,6 +24,7 @@
 #include <QMimeData>
 #include <QMenu>
 #include <QPlainTextEdit>
+#include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
@@ -93,6 +94,17 @@ int nearestPowerOfTwo(int value) {
     return upper;
 }
 
+int nextPowerOfTwo(int value) {
+    if (value <= 0) {
+        return 1;
+    }
+    int upper = 1;
+    while (upper < value && upper < (1 << 30)) {
+        upper <<= 1;
+    }
+    return upper;
+}
+
 int autoMipCount(int width, int height) {
     int maxDim = qMax(width, height);
     int count = 1;
@@ -120,6 +132,8 @@ bool registerBlpAssociation(const QString& appPath, QString* outError) {
     QSettings classes("HKEY_CURRENT_USER\\Software\\Classes", QSettings::NativeFormat);
     classes.beginGroup(".blp");
     classes.setValue(".", QLatin1String(kBlpProgId));
+    classes.setValue("PerceivedType", "image");
+    classes.setValue("Content Type", "image/blp");
     classes.endGroup();
     classes.setValue(QString("%1/.").arg(QLatin1String(kBlpProgId)), "BLP Image");
     classes.setValue(QString("%1/DefaultIcon/.").arg(QLatin1String(kBlpProgId)),
@@ -239,6 +253,25 @@ RgbaImage toRgbaImage(const QImage& image) {
     const int byteCount = converted.bytesPerLine() * converted.height();
     rgba.pixels = QByteArray(reinterpret_cast<const char*>(converted.constBits()), byteCount);
     return rgba;
+}
+
+bool writeFileBytes(const QString& path, const QByteArray& bytes, QString* outError) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (outError) {
+            *outError = "写入文件失败";
+        }
+        return false;
+    }
+    const qint64 written = file.write(bytes);
+    file.close();
+    if (written != bytes.size()) {
+        if (outError) {
+            *outError = "写入文件不完整";
+        }
+        return false;
+    }
+    return true;
 }
 
 const char* kInfoNormalStyle =
@@ -563,15 +596,15 @@ void MainWindow::setupUi() {
     pow2Layout->setSpacing(6);
     QLabel* pow2Label = new QLabel("非 2 次幂", pow2Panel_);
     pow2AlignButton_ = new QToolButton(pow2Panel_);
-    pow2AlignButton_->setText("对齐 2 次幂");
+    pow2AlignButton_->setText("拉伸对齐2次幂");
+    pow2CenterButton_ = new QToolButton(pow2Panel_);
+    pow2CenterButton_->setText("居中对齐2次幂");
     pow2RestoreButton_ = new QToolButton(pow2Panel_);
     pow2RestoreButton_->setText("恢复");
-    pow2SaveButton_ = new QToolButton(pow2Panel_);
-    pow2SaveButton_->setText("保存");
     pow2Layout->addWidget(pow2Label);
     pow2Layout->addWidget(pow2AlignButton_);
+    pow2Layout->addWidget(pow2CenterButton_);
     pow2Layout->addWidget(pow2RestoreButton_);
-    pow2Layout->addWidget(pow2SaveButton_);
     pow2Panel_->setVisible(false);
 
     QWidget* backgroundPanel = new QWidget(previewOverlay_);
@@ -662,8 +695,8 @@ void MainWindow::setupUi() {
     connect(fitButton, &QPushButton::clicked, this, &MainWindow::onFitClicked);
     connect(resetZoomButton, &QPushButton::clicked, this, &MainWindow::onResetZoomClicked);
     connect(pow2AlignButton_, &QToolButton::clicked, this, &MainWindow::onAlignPow2);
+    connect(pow2CenterButton_, &QToolButton::clicked, this, &MainWindow::onCenterPow2);
     connect(pow2RestoreButton_, &QToolButton::clicked, this, &MainWindow::onRestorePow2);
-    connect(pow2SaveButton_, &QToolButton::clicked, this, &MainWindow::onSavePow2);
     connect(pickBackgroundAction, &QAction::triggered, this, &MainWindow::onPickPreviewBackground);
     connect(resetBackgroundAction, &QAction::triggered, this, &MainWindow::onResetPreviewBackground);
     connect(imageView_, &ImageView::zoomChanged, this, [this](double zoom) {
@@ -1034,77 +1067,78 @@ void MainWindow::onAlignPow2() {
                                                          targetHeight,
                                                          Qt::IgnoreAspectRatio,
                                                          Qt::SmoothTransformation);
-    setPreviewImage(adjusted, true);
+    QString error;
+    if (!saveAlignedToSource(adjusted, &error)) {
+        logMessage(QString("对齐失败：%1").arg(error));
+        return;
+    }
+    logMessage("已拉伸对齐 2 次幂并保存");
 }
 
-void MainWindow::onRestorePow2() {
+void MainWindow::onCenterPow2() {
     if (previewOriginalImage_.isNull()) {
         return;
     }
-    setPreviewImage(previewOriginalImage_, false);
-}
 
-void MainWindow::onSavePow2() {
-    if (!previewAdjusted_ || previewAdjustedImage_.isNull()) {
+    const int targetWidth = nextPowerOfTwo(previewOriginalImage_.width());
+    const int targetHeight = nextPowerOfTwo(previewOriginalImage_.height());
+    if (targetWidth == previewOriginalImage_.width() &&
+        targetHeight == previewOriginalImage_.height()) {
+        updatePow2Overlay();
         return;
     }
 
-    QStringList filters;
-    filters << "BLP (*.blp)"
-            << "PNG (*.png)"
-            << "JPG (*.jpg *.jpeg)"
-            << "BMP (*.bmp)"
-            << "TGA (*.tga)";
+    QImage adjusted(targetWidth, targetHeight, QImage::Format_RGBA8888);
+    adjusted.fill(Qt::transparent);
+    QPainter painter(&adjusted);
+    const int offsetX = (targetWidth - previewOriginalImage_.width()) / 2;
+    const int offsetY = (targetHeight - previewOriginalImage_.height()) / 2;
+    painter.drawImage(offsetX, offsetY, previewOriginalImage_);
+    painter.end();
 
-    QString defaultExt = normalizeFormat(QFileInfo(currentPreviewPath_).suffix());
-    if (defaultExt.isEmpty()) {
-        defaultExt = "png";
+    QString error;
+    if (!saveAlignedToSource(adjusted, &error)) {
+        logMessage(QString("居中对齐失败：%1").arg(error));
+        return;
+    }
+    logMessage("已居中对齐 2 次幂并保存");
+}
+
+void MainWindow::onRestorePow2() {
+    if (!previewAdjusted_ || !hasOriginalBackup_ || currentPreviewPath_.isEmpty()) {
+        return;
     }
 
-    QString defaultName = "aligned_pow2";
-    QString defaultDir = QDir::homePath();
-    if (!currentPreviewPath_.isEmpty()) {
-        const QFileInfo info(currentPreviewPath_);
-        defaultDir = info.absolutePath();
-        defaultName = info.completeBaseName() + "_pow2";
-        if (!info.suffix().isEmpty()) {
-            defaultExt = normalizeFormat(info.suffix());
+    QString error;
+    if (!writeFileBytes(currentPreviewPath_, originalFileBytes_, &error)) {
+        logMessage(QString("恢复失败：%1").arg(error));
+        return;
+    }
+
+    currentMeta_ = originalMeta_;
+    previewAdjusted_ = false;
+    previewAdjustedImage_ = QImage();
+    currentIsBlp_ = (normalizeFormat(QFileInfo(currentPreviewPath_).suffix()) == "blp");
+    currentMipIndex_ = 0;
+
+    if (currentIsBlp_) {
+        currentBlpBytes_ = originalFileBytes_;
+        refreshMipList(currentBlpBytes_);
+    } else {
+        currentBlpBytes_.clear();
+        if (mipGroup_) {
+            mipGroup_->setVisible(false);
+        }
+        if (mipList_) {
+            mipList_->blockSignals(true);
+            mipList_->clear();
+            mipList_->setEnabled(false);
+            mipList_->blockSignals(false);
         }
     }
 
-    const QString defaultPath = QDir(defaultDir).filePath(defaultName + "." + defaultExt);
-    const QString filterString = filters.join(";;");
-    QString outputPath = QFileDialog::getSaveFileName(this,
-                                                      "保存对齐图像",
-                                                      defaultPath,
-                                                      filterString);
-    if (outputPath.isEmpty()) {
-        return;
-    }
-
-    QFileInfo outInfo(outputPath);
-    QString format = normalizeFormat(outInfo.suffix());
-    if (format.isEmpty()) {
-        format = defaultExt;
-        outputPath += "." + format;
-        outInfo = QFileInfo(outputPath);
-    }
-
-    if (!supportedExtensions().contains(format)) {
-        logMessage(QString("保存失败：不支持的格式 %1").arg(outInfo.suffix()));
-        return;
-    }
-
-    RgbaImage image = toRgbaImage(previewAdjustedImage_);
-    const int quality = qualitySlider_->value();
-    const int mipCount = (format == "blp") ? autoMipCount(image.width, image.height) : 1;
-    QString error;
-    if (!writeImageFile(outputPath, format, image, quality, mipCount, &error, &blpApi_)) {
-        logMessage(QString("保存失败：%1（%2）").arg(outputPath, error));
-        return;
-    }
-
-    logMessage(QString("已保存对齐图像：%1").arg(outputPath));
+    setPreviewImage(previewOriginalImage_, false);
+    logMessage("已恢复原始文件");
 }
 
 void MainWindow::onAssociateBlp() {
@@ -1135,6 +1169,7 @@ void MainWindow::onThumbnailToggled(bool enabled) {
 
 void MainWindow::addFiles(const QStringList& paths) {
     QStringList pending;
+    const int startCount = fileList_->count();
 
     for (const QString& path : paths) {
         QFileInfo info(path);
@@ -1160,7 +1195,9 @@ void MainWindow::addFiles(const QStringList& paths) {
         fileList_->addItem(path);
     }
 
-    if (fileList_->count() > 0 && !fileList_->currentItem()) {
+    if (!pending.isEmpty()) {
+        fileList_->setCurrentRow(startCount + pending.size() - 1);
+    } else if (fileList_->count() > 0 && !fileList_->currentItem()) {
         fileList_->setCurrentRow(0);
     }
 }
@@ -1255,57 +1292,11 @@ void MainWindow::updatePreview(const QString& path) {
         previewOriginalImage_ = previewImage;
         previewAdjusted_ = false;
         previewAdjustedImage_ = QImage();
+        originalFileBytes_ = bytes;
+        originalMeta_ = currentMeta_;
+        hasOriginalBackup_ = !originalFileBytes_.isEmpty();
         setPreviewImage(previewImage, false);
-
-        if (mipGroup_) {
-            mipGroup_->setVisible(true);
-        }
-        const QVector<BlpMipEntry> entries = readBlpMipEntries(bytes);
-        mipList_->blockSignals(true);
-        mipList_->clear();
-
-        if (entries.isEmpty()) {
-            auto* item = new QListWidgetItem(
-                QString("第1层（%1 x %2）").arg(currentMeta_.width).arg(currentMeta_.height));
-            item->setData(Qt::UserRole, 0);
-            mipList_->addItem(item);
-        } else {
-            for (int i = 0; i < 16; ++i) {
-                const int mipWidth = qMax(1, currentMeta_.width >> i);
-                const int mipHeight = qMax(1, currentMeta_.height >> i);
-                const BlpMipEntry* entry = nullptr;
-                for (const BlpMipEntry& candidate : entries) {
-                    if (candidate.index == i) {
-                        entry = &candidate;
-                        break;
-                    }
-                }
-
-                const bool hasData = (entry && entry->offset != 0 && entry->size != 0) || i == 0;
-                const QString sizeText = (entry && entry->size > 0)
-                                             ? formatFileSize(entry->size)
-                                             : QString("未知大小");
-                const QString text = hasData
-                                         ? QString("第%1层（%2 x %3，%4）")
-                                               .arg(i + 1)
-                                               .arg(mipWidth)
-                                               .arg(mipHeight)
-                                               .arg(sizeText)
-                                         : QString("第%1层（无数据）").arg(i + 1);
-
-                auto* item = new QListWidgetItem(text);
-                item->setData(Qt::UserRole, i);
-                if (!hasData) {
-                    item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
-                    item->setForeground(QColor(140, 146, 156));
-                }
-                mipList_->addItem(item);
-            }
-        }
-
-        mipList_->setEnabled(true);
-        mipList_->setCurrentRow(0);
-        mipList_->blockSignals(false);
+        refreshMipList(bytes);
 
         updateBlpStatus();
         return;
@@ -1328,6 +1319,15 @@ void MainWindow::updatePreview(const QString& path) {
     previewOriginalImage_ = previewImage;
     previewAdjusted_ = false;
     previewAdjustedImage_ = QImage();
+    originalMeta_ = meta;
+    QFile rawFile(path);
+    if (rawFile.open(QIODevice::ReadOnly)) {
+        originalFileBytes_ = rawFile.readAll();
+        rawFile.close();
+    } else {
+        originalFileBytes_.clear();
+    }
+    hasOriginalBackup_ = !originalFileBytes_.isEmpty();
     setPreviewImage(previewImage, false);
 
     if (mipGroup_) {
@@ -1339,6 +1339,59 @@ void MainWindow::updatePreview(const QString& path) {
     mipList_->blockSignals(false);
 
     updateBlpStatus();
+}
+
+void MainWindow::refreshMipList(const QByteArray& bytes) {
+    if (!mipGroup_ || !mipList_) {
+        return;
+    }
+
+    mipGroup_->setVisible(true);
+    const QVector<BlpMipEntry> entries = readBlpMipEntries(bytes);
+    mipList_->blockSignals(true);
+    mipList_->clear();
+
+    if (entries.isEmpty()) {
+        auto* item = new QListWidgetItem(
+            QString("第1层（%1 x %2）").arg(currentMeta_.width).arg(currentMeta_.height));
+        item->setData(Qt::UserRole, 0);
+        mipList_->addItem(item);
+    } else {
+        for (int i = 0; i < 16; ++i) {
+            const int mipWidth = qMax(1, currentMeta_.width >> i);
+            const int mipHeight = qMax(1, currentMeta_.height >> i);
+            const BlpMipEntry* entry = nullptr;
+            for (const BlpMipEntry& candidate : entries) {
+                if (candidate.index == i) {
+                    entry = &candidate;
+                    break;
+                }
+            }
+
+            const bool hasData = (entry && entry->offset != 0 && entry->size != 0) || i == 0;
+            const QString sizeText = (entry && entry->size > 0)
+                                         ? formatFileSize(entry->size)
+                                         : QString("未知大小");
+            const QString text = hasData ? QString("第%1层（%2 x %3，%4）")
+                                                .arg(i + 1)
+                                                .arg(mipWidth)
+                                                .arg(mipHeight)
+                                                .arg(sizeText)
+                                          : QString("第%1层（无数据）").arg(i + 1);
+
+            auto* item = new QListWidgetItem(text);
+            item->setData(Qt::UserRole, i);
+            if (!hasData) {
+                item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+                item->setForeground(QColor(140, 146, 156));
+            }
+            mipList_->addItem(item);
+        }
+    }
+
+    mipList_->setEnabled(true);
+    mipList_->setCurrentRow(0);
+    mipList_->blockSignals(false);
 }
 
 void MainWindow::updateInfoBar(const QString& path) {
@@ -1425,11 +1478,87 @@ void MainWindow::updatePow2Overlay() {
         pow2AlignButton_->setEnabled(!originalIsPot && !previewAdjusted_);
     }
     if (pow2RestoreButton_) {
-        pow2RestoreButton_->setEnabled(previewAdjusted_);
+        pow2RestoreButton_->setEnabled(previewAdjusted_ && hasOriginalBackup_);
     }
-    if (pow2SaveButton_) {
-        pow2SaveButton_->setEnabled(previewAdjusted_);
+    if (pow2CenterButton_) {
+        pow2CenterButton_->setEnabled(!originalIsPot && !previewAdjusted_);
     }
+}
+
+bool MainWindow::saveAlignedToSource(const QImage& image, QString* outError) {
+    if (currentPreviewPath_.isEmpty()) {
+        if (outError) {
+            *outError = "未选择文件";
+        }
+        return false;
+    }
+
+    const QFileInfo info(currentPreviewPath_);
+    const QString format = normalizeFormat(info.suffix());
+    if (format.isEmpty()) {
+        if (outError) {
+            *outError = "无法识别文件格式";
+        }
+        return false;
+    }
+    if (!supportedExtensions().contains(format)) {
+        if (outError) {
+            *outError = QString("不支持的格式 %1").arg(info.suffix());
+        }
+        return false;
+    }
+
+    RgbaImage rgba = toRgbaImage(image);
+    const int quality = qualitySlider_->value();
+    const int mipCount = (format == "blp") ? autoMipCount(rgba.width, rgba.height) : 1;
+    if (!writeImageFile(currentPreviewPath_, format, rgba, quality, mipCount, outError, &blpApi_)) {
+        return false;
+    }
+
+    const QFileInfo updatedInfo(currentPreviewPath_);
+    currentMeta_.width = image.width();
+    currentMeta_.height = image.height();
+    currentMeta_.format = format;
+    currentMeta_.fileSize = updatedInfo.exists() ? updatedInfo.size() : currentMeta_.fileSize;
+    currentIsBlp_ = (format == "blp");
+    currentMipIndex_ = 0;
+
+    if (currentIsBlp_) {
+        QFile file(currentPreviewPath_);
+        if (file.open(QIODevice::ReadOnly)) {
+            currentBlpBytes_ = file.readAll();
+            file.close();
+        } else {
+            currentBlpBytes_.clear();
+        }
+
+        if (!currentBlpBytes_.isEmpty()) {
+            refreshMipList(currentBlpBytes_);
+        } else {
+            if (mipGroup_) {
+                mipGroup_->setVisible(false);
+            }
+            if (mipList_) {
+                mipList_->blockSignals(true);
+                mipList_->clear();
+                mipList_->setEnabled(false);
+                mipList_->blockSignals(false);
+            }
+        }
+    } else {
+        if (mipGroup_) {
+            mipGroup_->setVisible(false);
+        }
+        if (mipList_) {
+            mipList_->blockSignals(true);
+            mipList_->clear();
+            mipList_->setEnabled(false);
+            mipList_->blockSignals(false);
+        }
+    }
+
+    setPreviewImage(image, true);
+    return true;
 }
 
 void MainWindow::setPreviewImage(const QImage& image, bool adjusted) {
@@ -1479,6 +1608,9 @@ void MainWindow::clearPreviewState() {
     previewOriginalImage_ = QImage();
     previewAdjustedImage_ = QImage();
     currentPreviewPath_.clear();
+    originalFileBytes_.clear();
+    originalMeta_ = ImageMeta();
+    hasOriginalBackup_ = false;
     previewAdjusted_ = false;
 
     if (mipGroup_) {
