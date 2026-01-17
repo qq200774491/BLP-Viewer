@@ -221,8 +221,8 @@ void MainWindow::setupUi() {
     QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(12);
-    leftPanel->setMinimumWidth(360);
-    leftPanel->setMaximumWidth(520);
+    leftPanel->setMinimumWidth(300);
+    leftPanel->setMaximumWidth(440);
 
     QGroupBox* fileGroup = new QGroupBox("待处理文件", leftPanel);
     QVBoxLayout* fileLayout = new QVBoxLayout(fileGroup);
@@ -246,54 +246,73 @@ void MainWindow::setupUi() {
     leftLayout->addWidget(fileGroup, 2);
 
     QGroupBox* pathGroup = new QGroupBox("批量路径", leftPanel);
-    QGridLayout* pathLayout = new QGridLayout(pathGroup);
-    pathLayout->setColumnStretch(1, 1);
-    pathLayout->setColumnMinimumWidth(1, 320);
+    QVBoxLayout* pathLayout = new QVBoxLayout(pathGroup);
+    pathLayout->setSpacing(6);
 
     QLabel* inputLabel = new QLabel("输入目录（可选）：", pathGroup);
     inputDirEdit_ = new QLineEdit(pathGroup);
     inputDirEdit_->setPlaceholderText("选择目录后可点击“扫描”加入列表");
     inputDirEdit_->setClearButtonEnabled(true);
-    inputDirEdit_->setMinimumWidth(320);
+    inputDirEdit_->setMinimumWidth(0);
     inputDirEdit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     QPushButton* inputBrowse = new QPushButton("选择", pathGroup);
     QPushButton* scanButton = new QPushButton("扫描", pathGroup);
     inputBrowse->setFixedWidth(72);
     scanButton->setFixedWidth(72);
 
+    QWidget* inputRow = new QWidget(pathGroup);
+    QHBoxLayout* inputRowLayout = new QHBoxLayout(inputRow);
+    inputRowLayout->setContentsMargins(0, 0, 0, 0);
+    inputRowLayout->setSpacing(6);
+    inputRowLayout->addWidget(inputDirEdit_, 1);
+    inputRowLayout->addWidget(inputBrowse);
+    inputRowLayout->addWidget(scanButton);
+
     QLabel* outputLabel = new QLabel("输出目录（必填）：", pathGroup);
     outputDirEdit_ = new QLineEdit(pathGroup);
     outputDirEdit_->setPlaceholderText("选择输出目录");
     outputDirEdit_->setClearButtonEnabled(true);
-    outputDirEdit_->setMinimumWidth(320);
+    outputDirEdit_->setMinimumWidth(0);
     outputDirEdit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     QPushButton* outputBrowse = new QPushButton("选择", pathGroup);
     outputBrowse->setFixedWidth(72);
 
+    QWidget* outputRow = new QWidget(pathGroup);
+    QHBoxLayout* outputRowLayout = new QHBoxLayout(outputRow);
+    outputRowLayout->setContentsMargins(0, 0, 0, 0);
+    outputRowLayout->setSpacing(6);
+    outputRowLayout->addWidget(outputDirEdit_, 1);
+    outputRowLayout->addWidget(outputBrowse);
+
     recursiveCheck_ = new QCheckBox("包含子目录", pathGroup);
 
-    pathLayout->addWidget(inputLabel, 0, 0);
-    pathLayout->addWidget(inputDirEdit_, 0, 1);
-    pathLayout->addWidget(inputBrowse, 0, 2);
-    pathLayout->addWidget(scanButton, 0, 3);
-    pathLayout->addWidget(outputLabel, 1, 0);
-    pathLayout->addWidget(outputDirEdit_, 1, 1);
-    pathLayout->addWidget(outputBrowse, 1, 2);
-    pathLayout->addWidget(recursiveCheck_, 1, 3);
+    pathLayout->addWidget(inputLabel);
+    pathLayout->addWidget(inputRow);
+    pathLayout->addWidget(outputLabel);
+    pathLayout->addWidget(outputRow);
+    pathLayout->addWidget(recursiveCheck_);
     leftLayout->addWidget(pathGroup);
 
     QGroupBox* convertGroup = new QGroupBox("转换设置", leftPanel);
     QGridLayout* convertLayout = new QGridLayout(convertGroup);
+    convertLayout->setColumnStretch(1, 1);
+    convertLayout->setColumnStretch(2, 0);
+    convertLayout->setHorizontalSpacing(10);
 
     QLabel* formatLabel = new QLabel("输出格式：", convertGroup);
     formatCombo_ = new QComboBox(convertGroup);
     formatCombo_->addItems({"BLP", "PNG", "JPG", "BMP", "TGA"});
+    formatCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    formatCombo_->setMinimumContentsLength(6);
+    formatCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
 
     qualityLabel_ = new QLabel("质量：", convertGroup);
     qualitySlider_ = new QSlider(Qt::Horizontal, convertGroup);
     qualitySlider_->setRange(0, 100);
     qualitySlider_->setValue(90);
+    qualitySlider_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     qualityValueLabel_ = new QLabel("90", convertGroup);
+    qualityValueLabel_->setMinimumWidth(32);
 
     QLabel* mipLabel = new QLabel("层级数量：", convertGroup);
     mipSpin_ = new QSpinBox(convertGroup);
@@ -348,8 +367,8 @@ void MainWindow::setupUi() {
     QVBoxLayout* mipLayout = new QVBoxLayout(mipGroup);
     mipList_ = new QListWidget(mipGroup);
     mipList_->setSelectionMode(QAbstractItemView::SingleSelection);
-    mipList_->setMinimumHeight(90);
-    mipList_->setMaximumHeight(160);
+    mipList_->setMinimumHeight(80);
+    mipList_->setMaximumHeight(130);
     mipLayout->addWidget(mipList_);
     rightLayout->addWidget(mipGroup);
 
@@ -366,9 +385,9 @@ void MainWindow::setupUi() {
 
     splitter->addWidget(leftPanel);
     splitter->addWidget(rightPanel);
-    splitter->setStretchFactor(0, 2);
-    splitter->setStretchFactor(1, 3);
-    splitter->setSizes({420, 780});
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 2);
+    splitter->setSizes({340, 860});
 
     rootLayout->addWidget(splitter, 1);
 
@@ -435,13 +454,28 @@ void MainWindow::applyStyle() {
 
     const QString style =
         "QMainWindow { background: #f5f6f8; }"
-        "QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {"
+        "QLineEdit, QSpinBox, QPlainTextEdit {"
         "  border: 1px solid #d1d5dc;"
         "  border-radius: 6px;"
         "  padding: 4px 6px;"
         "  background: #ffffff;"
         "}"
-        "QComboBox::drop-down { border: 0px; }"
+        "QComboBox {"
+        "  border: 1px solid #d1d5dc;"
+        "  border-radius: 6px;"
+        "  padding: 4px 6px 4px 8px;"
+        "  background: #ffffff;"
+        "  min-width: 140px;"
+        "}"
+        "QComboBox::item {"
+        "  padding: 4px 8px;"
+        "}"
+        "QComboBox::drop-down {"
+        "  border: 0px;"
+        "  width: 20px;"
+        "  subcontrol-origin: padding;"
+        "  subcontrol-position: right center;"
+        "}"
         "QPushButton {"
         "  background: #2d6cdf;"
         "  color: white;"
@@ -808,20 +842,49 @@ void MainWindow::updatePreview(const QString& path) {
         currentMipIndex_ = 0;
         setInfoText(currentMeta_, 0);
 
-        const int detected = detectBlpMipCount(bytes);
-        const int mipCount = qMax(1, detected);
+        const QVector<BlpMipEntry> entries = readBlpMipEntries(bytes);
         mipList_->blockSignals(true);
         mipList_->clear();
-        for (int i = 0; i < mipCount; ++i) {
-            const int mipWidth = qMax(1, currentMeta_.width >> i);
-            const int mipHeight = qMax(1, currentMeta_.height >> i);
-            auto* item = new QListWidgetItem(QString("第%1层（%2 x %3）")
-                                                 .arg(i)
-                                                 .arg(mipWidth)
-                                                 .arg(mipHeight));
-            item->setData(Qt::UserRole, i);
+
+        if (entries.isEmpty()) {
+            auto* item = new QListWidgetItem(
+                QString("第1层（%1 x %2）").arg(currentMeta_.width).arg(currentMeta_.height));
+            item->setData(Qt::UserRole, 0);
             mipList_->addItem(item);
+        } else {
+            for (int i = 0; i < 16; ++i) {
+                const int mipWidth = qMax(1, currentMeta_.width >> i);
+                const int mipHeight = qMax(1, currentMeta_.height >> i);
+                const BlpMipEntry* entry = nullptr;
+                for (const BlpMipEntry& candidate : entries) {
+                    if (candidate.index == i) {
+                        entry = &candidate;
+                        break;
+                    }
+                }
+
+                const bool hasData = (entry && entry->offset != 0 && entry->size != 0) || i == 0;
+                const QString sizeText = (entry && entry->size > 0)
+                                             ? formatFileSize(entry->size)
+                                             : QString("未知大小");
+                const QString text = hasData
+                                         ? QString("第%1层（%2 x %3，%4）")
+                                               .arg(i + 1)
+                                               .arg(mipWidth)
+                                               .arg(mipHeight)
+                                               .arg(sizeText)
+                                         : QString("第%1层（无数据）").arg(i + 1);
+
+                auto* item = new QListWidgetItem(text);
+                item->setData(Qt::UserRole, i);
+                if (!hasData) {
+                    item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+                    item->setForeground(QColor(140, 146, 156));
+                }
+                mipList_->addItem(item);
+            }
         }
+
         mipList_->setEnabled(true);
         mipList_->setCurrentRow(0);
         mipList_->blockSignals(false);
@@ -882,7 +945,7 @@ void MainWindow::setInfoText(const ImageMeta& meta, int mipIndex) {
                        .arg(meta.format.toUpper());
 
     if (mipIndex >= 0) {
-        info += QString(" | 层级 %1").arg(mipIndex);
+        info += QString(" | 层级 %1").arg(mipIndex + 1);
     }
 
     const bool isPot = isPowerOfTwo(meta.width) && isPowerOfTwo(meta.height);
@@ -905,7 +968,7 @@ void MainWindow::clearPreviewState() {
     if (mipList_) {
         mipList_->blockSignals(true);
         mipList_->clear();
-        mipList_->addItem("仅 BLP 文件显示层级");
+    mipList_->addItem("仅 BLP 文件显示层级列表");
         mipList_->setEnabled(false);
         mipList_->blockSignals(false);
     }
