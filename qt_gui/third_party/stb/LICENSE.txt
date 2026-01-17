@@ -1,0 +1,7 @@
+STB single-header libraries
+
+Public Domain (or MIT licensed where public domain is not recognized).
+
+For details, see the header files:
+- stb_image.h
+- stb_image_write.h

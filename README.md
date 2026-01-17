@@ -10,6 +10,11 @@ Rust library for working with BLP files (Blizzard texture format) with C/C++ int
 
 This library provides a C-compatible API for working with BLP files, using the Rust crate [blp](https://crates.io/crates/blp). Supports loading BLP files from data buffer or filesystem and converting them to RGBA format.
 
+## Qt GUI (Viewer + Batch Converter)
+
+See `qt_gui/README.md` for a Qt Widgets front-end that previews BLP files, shows alpha,
+and batch converts between BMP/JPG/PNG/TGA/BLP with drag & drop.
+
 ## Compilation
 
 ```bash

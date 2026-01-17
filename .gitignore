@@ -10,6 +10,7 @@ Cargo.lock
 
 # Результаты сборки C
 /build/
+/qt_gui/build/
 *.o
 *.a
 *.so
