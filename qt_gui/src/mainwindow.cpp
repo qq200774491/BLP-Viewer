@@ -1,8 +1,10 @@
 #include "mainwindow.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCheckBox>
-#include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
@@ -10,6 +12,7 @@
 #include <QDropEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QEvent>
 #include <QGroupBox>
 #include <QGridLayout>
@@ -21,16 +24,23 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QSettings>
 #include <QSlider>
-#include <QSpinBox>
 #include <QSplitter>
 #include <QSizePolicy>
 #include <QStatusBar>
 #include <QTemporaryFile>
+#include <QToolBar>
 #include <QVBoxLayout>
 #include <QUrl>
 #include <QtEndian>
 #include <QVector>
+
+#ifdef Q_OS_WIN
+#include <ShlObj.h>
+#include <Windows.h>
+#endif
 
 #include "blp_api.h"
 #include "image_io.h"
@@ -57,6 +67,111 @@ QStringList extractLocalPaths(const QMimeData* mimeData) {
 bool isPowerOfTwo(int value) {
     return value > 0 && ((value & (value - 1)) == 0);
 }
+
+int autoMipCount(int width, int height) {
+    int maxDim = qMax(width, height);
+    int count = 1;
+    while (maxDim > 1 && count < 16) {
+        maxDim /= 2;
+        ++count;
+    }
+    return count;
+}
+
+const char* kBlpProgId = "BLPViewer.File";
+const char* kThumbnailClsid = "{27A35239-0B87-4085-8944-463B440D162F}";
+const char* kThumbnailHandler = "{E357FCCD-A995-4576-B01F-234630154E96}";
+
+#ifdef Q_OS_WIN
+bool isBlpAssociated() {
+    QSettings classes("HKEY_CURRENT_USER\\Software\\Classes", QSettings::NativeFormat);
+    classes.beginGroup(".blp");
+    const QString progId = classes.value(".").toString();
+    classes.endGroup();
+    return progId.compare(QLatin1String(kBlpProgId), Qt::CaseInsensitive) == 0;
+}
+
+bool registerBlpAssociation(const QString& appPath, QString* outError) {
+    QSettings classes("HKEY_CURRENT_USER\\Software\\Classes", QSettings::NativeFormat);
+    classes.beginGroup(".blp");
+    classes.setValue(".", QLatin1String(kBlpProgId));
+    classes.endGroup();
+    classes.setValue(QString("%1/.").arg(QLatin1String(kBlpProgId)), "BLP Image");
+    classes.setValue(QString("%1/DefaultIcon/.").arg(QLatin1String(kBlpProgId)),
+                     QDir::toNativeSeparators(appPath) + ",0");
+    classes.setValue(QString("%1/shell/open/command/.").arg(QLatin1String(kBlpProgId)),
+                     QString("\"%1\" \"%2\"").arg(QDir::toNativeSeparators(appPath), "%1"));
+    classes.sync();
+    if (classes.status() != QSettings::NoError) {
+        if (outError) {
+            *outError = "写入注册表失败";
+        }
+        return false;
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    return true;
+}
+
+bool isThumbnailRegistered() {
+    QSettings classes("HKEY_CURRENT_USER\\Software\\Classes", QSettings::NativeFormat);
+    const QString key = QString(".blp/ShellEx/%1/.").arg(QLatin1String(kThumbnailHandler));
+    const QString clsid = classes.value(key).toString();
+    return clsid.compare(QLatin1String(kThumbnailClsid), Qt::CaseInsensitive) == 0;
+}
+
+bool callDllEntry(const QString& dllPath, const char* entry, QString* outError) {
+    const std::wstring widePath = dllPath.toStdWString();
+    HMODULE module = LoadLibraryW(widePath.c_str());
+    if (!module) {
+        if (outError) {
+            *outError = "加载缩略图 DLL 失败";
+        }
+        return false;
+    }
+
+    auto* func = reinterpret_cast<HRESULT (STDAPICALLTYPE*)(void)>(
+        GetProcAddress(module, entry));
+    if (!func) {
+        if (outError) {
+            *outError = "找不到注册入口";
+        }
+        FreeLibrary(module);
+        return false;
+    }
+
+    const HRESULT hr = func();
+    FreeLibrary(module);
+    if (FAILED(hr)) {
+        if (outError) {
+            *outError = "注册调用失败";
+        }
+        return false;
+    }
+    return true;
+}
+#else
+bool isBlpAssociated() {
+    return false;
+}
+
+bool registerBlpAssociation(const QString&, QString* outError) {
+    if (outError) {
+        *outError = "仅支持 Windows";
+    }
+    return false;
+}
+
+bool isThumbnailRegistered() {
+    return false;
+}
+
+bool callDllEntry(const QString&, const char*, QString* outError) {
+    if (outError) {
+        *outError = "仅支持 Windows";
+    }
+    return false;
+}
+#endif
 
 struct BlpMipEntry {
     int index = 0;
@@ -156,6 +271,20 @@ MainWindow::MainWindow(QWidget* parent)
     applyStyle();
     qApp->installEventFilter(this);
     updateBlpStatus();
+    updateAssociationAction();
+    updateThumbnailAction();
+#ifdef Q_OS_WIN
+    if (!isBlpAssociated()) {
+        QString error;
+        const QString appPath = QCoreApplication::applicationFilePath();
+        if (registerBlpAssociation(appPath, &error)) {
+            logMessage("已自动关联 .blp 打开方式");
+        } else {
+            logMessage(QString("自动关联 .blp 失败：%1").arg(error));
+        }
+        updateAssociationAction();
+    }
+#endif
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
@@ -226,24 +355,39 @@ void MainWindow::setupUi() {
 
     QGroupBox* fileGroup = new QGroupBox("待处理文件", leftPanel);
     QVBoxLayout* fileLayout = new QVBoxLayout(fileGroup);
+    fileLayout->setSpacing(8);
     QLabel* fileHint = new QLabel("拖拽图片到任意位置，或使用按钮添加。列表中的文件会参与批量转换。", fileGroup);
     fileHint->setWordWrap(true);
     fileHint->setStyleSheet("color: #5b6472;");
+    QWidget* fileListFrame = new QWidget(fileGroup);
+    fileListFrame->setObjectName("fileListFrame");
+    QVBoxLayout* fileListFrameLayout = new QVBoxLayout(fileListFrame);
+    fileListFrameLayout->setContentsMargins(0, 0, 0, 0);
+    fileListFrameLayout->setSpacing(0);
     fileList_ = new FileListWidget(fileGroup);
-    fileList_->setMinimumHeight(260);
-    QHBoxLayout* fileButtons = new QHBoxLayout();
-    QPushButton* addFilesButton = new QPushButton("添加文件", fileGroup);
-    QPushButton* addFolderButton = new QPushButton("添加文件夹", fileGroup);
-    QPushButton* removeButton = new QPushButton("移除", fileGroup);
-    QPushButton* clearButton = new QPushButton("清空", fileGroup);
+    fileList_->setObjectName("fileList");
+    fileList_->setMinimumHeight(240);
+    fileList_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    fileListFrameLayout->addWidget(fileList_);
+
+    QWidget* fileButtonsRow = new QWidget(fileGroup);
+    QHBoxLayout* fileButtons = new QHBoxLayout(fileButtonsRow);
+    fileButtons->setContentsMargins(0, 0, 0, 0);
+    fileButtons->setSpacing(8);
+    fileButtonsRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    fileButtonsRow->setMinimumHeight(36);
+    QPushButton* addFilesButton = new QPushButton("添加文件", fileButtonsRow);
+    QPushButton* addFolderButton = new QPushButton("添加文件夹", fileButtonsRow);
+    QPushButton* removeButton = new QPushButton("移除", fileButtonsRow);
+    QPushButton* clearButton = new QPushButton("清空", fileButtonsRow);
     fileButtons->addWidget(addFilesButton);
     fileButtons->addWidget(addFolderButton);
     fileButtons->addWidget(removeButton);
     fileButtons->addWidget(clearButton);
     fileLayout->addWidget(fileHint);
-    fileLayout->addWidget(fileList_, 1);
-    fileLayout->addLayout(fileButtons);
-    leftLayout->addWidget(fileGroup, 2);
+    fileLayout->addWidget(fileListFrame, 1);
+    fileLayout->addWidget(fileButtonsRow);
+    leftLayout->addWidget(fileGroup, 3);
 
     QGroupBox* pathGroup = new QGroupBox("批量路径", leftPanel);
     QVBoxLayout* pathLayout = new QVBoxLayout(pathGroup);
@@ -300,36 +444,45 @@ void MainWindow::setupUi() {
     convertLayout->setHorizontalSpacing(10);
 
     QLabel* formatLabel = new QLabel("输出格式：", convertGroup);
-    formatCombo_ = new QComboBox(convertGroup);
-    formatCombo_->addItems({"BLP", "PNG", "JPG", "BMP", "TGA"});
-    formatCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    formatCombo_->setMinimumContentsLength(6);
-    formatCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    formatGroup_ = new QButtonGroup(convertGroup);
+    formatGroup_->setExclusive(true);
+    QWidget* formatOptions = new QWidget(convertGroup);
+    QGridLayout* formatLayout = new QGridLayout(formatOptions);
+    formatLayout->setContentsMargins(0, 0, 0, 0);
+    formatLayout->setHorizontalSpacing(12);
+    formatLayout->setVerticalSpacing(6);
+
+    auto addFormatOption = [&](const QString& label, const QString& value, int row, int col, bool checked) {
+        auto* button = new QRadioButton(label, formatOptions);
+        button->setProperty("format", value);
+        button->setChecked(checked);
+        formatGroup_->addButton(button);
+        formatLayout->addWidget(button, row, col);
+    };
+    addFormatOption("BLP", "BLP", 0, 0, true);
+    addFormatOption("PNG", "PNG", 0, 1, false);
+    addFormatOption("JPG", "JPG", 0, 2, false);
+    addFormatOption("BMP", "BMP", 1, 0, false);
+    addFormatOption("TGA", "TGA", 1, 1, false);
+    formatLayout->setColumnStretch(2, 1);
 
     qualityLabel_ = new QLabel("质量：", convertGroup);
     qualitySlider_ = new QSlider(Qt::Horizontal, convertGroup);
     qualitySlider_->setRange(0, 100);
-    qualitySlider_->setValue(90);
+    qualitySlider_->setValue(100);
     qualitySlider_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    qualityValueLabel_ = new QLabel("90", convertGroup);
+    qualityValueLabel_ = new QLabel("100", convertGroup);
     qualityValueLabel_->setMinimumWidth(32);
-
-    QLabel* mipLabel = new QLabel("层级数量：", convertGroup);
-    mipSpin_ = new QSpinBox(convertGroup);
-    mipSpin_->setRange(1, 16);
-    mipSpin_->setValue(1);
 
     overwriteCheck_ = new QCheckBox("覆盖已存在文件", convertGroup);
     overwriteCheck_->setChecked(false);
 
     convertLayout->addWidget(formatLabel, 0, 0);
-    convertLayout->addWidget(formatCombo_, 0, 1, 1, 2);
+    convertLayout->addWidget(formatOptions, 0, 1, 1, 2);
     convertLayout->addWidget(qualityLabel_, 1, 0);
     convertLayout->addWidget(qualitySlider_, 1, 1);
     convertLayout->addWidget(qualityValueLabel_, 1, 2);
-    convertLayout->addWidget(mipLabel, 2, 0);
-    convertLayout->addWidget(mipSpin_, 2, 1, 1, 2);
-    convertLayout->addWidget(overwriteCheck_, 3, 0, 1, 3);
+    convertLayout->addWidget(overwriteCheck_, 2, 0, 1, 3);
 
     leftLayout->addWidget(convertGroup);
 
@@ -346,9 +499,10 @@ void MainWindow::setupUi() {
     QVBoxLayout* logLayout = new QVBoxLayout(logGroup);
     logEdit_ = new QPlainTextEdit(logGroup);
     logEdit_->setReadOnly(true);
-    logEdit_->setMinimumHeight(120);
+    logEdit_->setMinimumHeight(80);
     logLayout->addWidget(logEdit_);
-    leftLayout->addWidget(logGroup, 1);
+    logGroup->setMaximumHeight(160);
+    leftLayout->addWidget(logGroup, 0);
 
     QWidget* rightPanel = new QWidget(splitter);
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
@@ -363,14 +517,14 @@ void MainWindow::setupUi() {
     imageView_ = new ImageView(rightPanel);
     rightLayout->addWidget(imageView_, 1);
 
-    QGroupBox* mipGroup = new QGroupBox("BLP 层级", rightPanel);
-    QVBoxLayout* mipLayout = new QVBoxLayout(mipGroup);
-    mipList_ = new QListWidget(mipGroup);
+    mipGroup_ = new QGroupBox("BLP 层级", rightPanel);
+    QVBoxLayout* mipLayout = new QVBoxLayout(mipGroup_);
+    mipList_ = new QListWidget(mipGroup_);
     mipList_->setSelectionMode(QAbstractItemView::SingleSelection);
     mipList_->setMinimumHeight(80);
     mipList_->setMaximumHeight(130);
     mipLayout->addWidget(mipList_);
-    rightLayout->addWidget(mipGroup);
+    rightLayout->addWidget(mipGroup_);
 
     QHBoxLayout* zoomLayout = new QHBoxLayout();
     QPushButton* fitButton = new QPushButton("适应窗口", rightPanel);
@@ -393,6 +547,14 @@ void MainWindow::setupUi() {
 
     setCentralWidget(central);
 
+    QToolBar* toolBar = new QToolBar("工具", this);
+    toolBar->setMovable(false);
+    toolBar->setFloatable(false);
+    addToolBar(Qt::TopToolBarArea, toolBar);
+    associateAction_ = toolBar->addAction("关联 BLP 打开方式");
+    thumbnailAction_ = toolBar->addAction("资源管理器缩略图");
+    thumbnailAction_->setCheckable(true);
+
     infoLabel_ = new QLabel("未加载图像", this);
     zoomLabel_ = new QLabel("缩放：100%", this);
     blpLabel_ = new QLabel("BLP：未加载", this);
@@ -401,6 +563,8 @@ void MainWindow::setupUi() {
     statusBar()->addPermanentWidget(zoomLabel_);
     statusBar()->addPermanentWidget(blpLabel_);
 
+    connect(associateAction_, &QAction::triggered, this, &MainWindow::onAssociateBlp);
+    connect(thumbnailAction_, &QAction::toggled, this, &MainWindow::onThumbnailToggled);
     connect(addFilesButton, &QPushButton::clicked, this, &MainWindow::onAddFiles);
     connect(addFolderButton, &QPushButton::clicked, this, &MainWindow::onAddFolder);
     connect(scanButton, &QPushButton::clicked, this, &MainWindow::onScanInputDir);
@@ -412,7 +576,8 @@ void MainWindow::setupUi() {
     connect(fileList_, &QListWidget::currentItemChanged, this, &MainWindow::onSelectionChanged);
     connect(fileList_, &FileListWidget::filesDropped, this, &MainWindow::addFiles);
     connect(mipList_, &QListWidget::currentItemChanged, this, &MainWindow::onMipSelectionChanged);
-    connect(formatCombo_, &QComboBox::currentTextChanged, this, &MainWindow::onFormatChanged);
+    connect(formatGroup_, QOverload<QAbstractButton*>::of(&QButtonGroup::buttonClicked), this,
+            [this](QAbstractButton*) { onFormatChanged(); });
     connect(qualitySlider_, &QSlider::valueChanged, this, [this](int value) {
         qualityValueLabel_->setText(QString::number(value));
     });
@@ -495,10 +660,26 @@ void MainWindow::applyStyle() {
         "  padding: 0 4px;"
         "  color: #3b3f45;"
         "}"
+        "QWidget#fileListFrame {"
+        "  border: 1px solid #d1d5dc;"
+        "  border-radius: 6px;"
+        "  background: #ffffff;"
+        "}"
+        "QListWidget#fileList {"
+        "  border: 0px;"
+        "  background: transparent;"
+        "}"
         "QListWidget {"
         "  border: 1px solid #d1d5dc;"
         "  border-radius: 6px;"
         "  background: #ffffff;"
+        "}"
+        "QRadioButton {"
+        "  color: #1e2127;"
+        "}"
+        "QToolBar {"
+        "  background: #f5f6f8;"
+        "  border: 0px;"
         "}"
         "QStatusBar { background: #eef0f4; }"
         "QProgressBar {"
@@ -600,7 +781,7 @@ void MainWindow::onConvertAll() {
 
     const QString format = normalizedFormat();
     const int quality = qualitySlider_->value();
-    const int mipCount = mipSpin_->value();
+    const bool formatIsBlp = (format == "blp");
     const bool overwrite = overwriteCheck_->isChecked();
 
     progressBar_->setRange(0, fileList_->count());
@@ -622,6 +803,7 @@ void MainWindow::onConvertAll() {
         }
 
         const QString outputPath = buildOutputPath(inputPath, format, overwrite);
+        const int mipCount = formatIsBlp ? autoMipCount(image.width, image.height) : 1;
         if (!writeImageFile(outputPath, format, image, quality, mipCount, &error, &blpApi_)) {
             logMessage(QString("写入失败：%1（%2）").arg(outputPath, error));
             progressBar_->setValue(i + 1);
@@ -707,7 +889,6 @@ void MainWindow::onFormatChanged() {
     qualitySlider_->setEnabled(isBlp || isJpg);
     qualityLabel_->setText(isBlp ? "BLP 质量：" : (isJpg ? "JPG 质量：" : "质量："));
     qualityValueLabel_->setEnabled(isBlp || isJpg);
-    mipSpin_->setEnabled(isBlp);
 }
 
 void MainWindow::onZoomSliderChanged(int value) {
@@ -720,6 +901,32 @@ void MainWindow::onFitClicked() {
 
 void MainWindow::onResetZoomClicked() {
     imageView_->setZoom(1.0);
+}
+
+void MainWindow::onAssociateBlp() {
+    QString error;
+    const QString appPath = QCoreApplication::applicationFilePath();
+    if (registerBlpAssociation(appPath, &error)) {
+        logMessage("已关联 .blp 打开方式");
+    } else {
+        logMessage(QString("关联 .blp 失败：%1").arg(error));
+    }
+    updateAssociationAction();
+}
+
+void MainWindow::onThumbnailToggled(bool enabled) {
+    QString error;
+    const QString dllPath =
+        QDir(QCoreApplication::applicationDirPath()).filePath("blp_thumbnail.dll");
+    const char* entry = enabled ? "DllRegisterServer" : "DllUnregisterServer";
+    if (callDllEntry(dllPath, entry, &error)) {
+        logMessage(enabled ? "已启用资源管理器缩略图" : "已关闭资源管理器缩略图");
+    } else {
+        logMessage(QString("%1：%2")
+                       .arg(enabled ? "启用缩略图失败" : "关闭缩略图失败")
+                       .arg(error));
+    }
+    updateThumbnailAction();
 }
 
 void MainWindow::addFiles(const QStringList& paths) {
@@ -842,6 +1049,9 @@ void MainWindow::updatePreview(const QString& path) {
         currentMipIndex_ = 0;
         setInfoText(currentMeta_, 0);
 
+        if (mipGroup_) {
+            mipGroup_->setVisible(true);
+        }
         const QVector<BlpMipEntry> entries = readBlpMipEntries(bytes);
         mipList_->blockSignals(true);
         mipList_->clear();
@@ -909,9 +1119,11 @@ void MainWindow::updatePreview(const QString& path) {
     currentMeta_ = meta;
     setInfoText(meta, -1);
 
+    if (mipGroup_) {
+        mipGroup_->setVisible(false);
+    }
     mipList_->blockSignals(true);
     mipList_->clear();
-    mipList_->addItem("仅 BLP 文件显示层级列表");
     mipList_->setEnabled(false);
     mipList_->blockSignals(false);
 
@@ -935,6 +1147,53 @@ void MainWindow::updateBlpStatus() {
     } else {
         blpLabel_->setText("BLP：未加载");
     }
+}
+
+void MainWindow::updateAssociationAction() {
+    if (!associateAction_) {
+        return;
+    }
+
+    if (isBlpAssociated()) {
+        associateAction_->setText("BLP 已关联");
+        associateAction_->setEnabled(false);
+        return;
+    }
+
+#ifdef Q_OS_WIN
+    associateAction_->setText("关联 BLP 打开方式");
+    associateAction_->setEnabled(true);
+#else
+    associateAction_->setText("关联 BLP（仅 Windows）");
+    associateAction_->setEnabled(false);
+#endif
+}
+
+void MainWindow::updateThumbnailAction() {
+    if (!thumbnailAction_) {
+        return;
+    }
+
+#ifdef Q_OS_WIN
+    const QString dllPath =
+        QDir(QCoreApplication::applicationDirPath()).filePath("blp_thumbnail.dll");
+    if (!QFileInfo::exists(dllPath)) {
+        thumbnailAction_->setText("资源管理器缩略图（缺少 DLL）");
+        thumbnailAction_->setEnabled(false);
+        thumbnailAction_->setChecked(false);
+        return;
+    }
+    const bool registered = isThumbnailRegistered();
+    thumbnailAction_->blockSignals(true);
+    thumbnailAction_->setChecked(registered);
+    thumbnailAction_->blockSignals(false);
+    thumbnailAction_->setText(registered ? "资源管理器缩略图已启用" : "资源管理器缩略图");
+    thumbnailAction_->setEnabled(true);
+#else
+    thumbnailAction_->setText("资源管理器缩略图（仅 Windows）");
+    thumbnailAction_->setEnabled(false);
+    thumbnailAction_->setChecked(false);
+#endif
 }
 
 void MainWindow::setInfoText(const ImageMeta& meta, int mipIndex) {
@@ -965,10 +1224,12 @@ void MainWindow::clearPreviewState() {
     currentIsBlp_ = false;
     currentMipIndex_ = 0;
 
+    if (mipGroup_) {
+        mipGroup_->setVisible(false);
+    }
     if (mipList_) {
         mipList_->blockSignals(true);
         mipList_->clear();
-    mipList_->addItem("仅 BLP 文件显示层级列表");
         mipList_->setEnabled(false);
         mipList_->blockSignals(false);
     }
@@ -1009,5 +1270,12 @@ QString MainWindow::buildOutputPath(const QString& inputPath, const QString& for
 }
 
 QString MainWindow::normalizedFormat() const {
-    return normalizeFormat(formatCombo_->currentText());
+    if (!formatGroup_) {
+        return "blp";
+    }
+    const QAbstractButton* checked = formatGroup_->checkedButton();
+    if (!checked) {
+        return "blp";
+    }
+    return normalizeFormat(checked->property("format").toString());
 }

@@ -7,6 +7,7 @@
 #include "blp_api.h"
 #include "image_io.h"
 
+class QAction;
 class QLabel;
 class QLineEdit;
 class QListWidgetItem;
@@ -14,9 +15,9 @@ class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSlider;
-class QSpinBox;
-class QComboBox;
+class QButtonGroup;
 class QCheckBox;
+class QGroupBox;
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
@@ -63,6 +64,8 @@ private slots:
     void onZoomSliderChanged(int value);
     void onFitClicked();
     void onResetZoomClicked();
+    void onAssociateBlp();
+    void onThumbnailToggled(bool enabled);
 
 private:
     void setupUi();
@@ -72,6 +75,8 @@ private:
     void updatePreview(const QString& path);
     void updateInfoBar(const QString& path);
     void updateBlpStatus();
+    void updateAssociationAction();
+    void updateThumbnailAction();
     void logMessage(const QString& message);
     QString buildOutputPath(const QString& inputPath, const QString& format, bool overwrite) const;
     QString normalizedFormat() const;
@@ -80,18 +85,20 @@ private:
 
     FileListWidget* fileList_ = nullptr;
     ImageView* imageView_ = nullptr;
+    QGroupBox* mipGroup_ = nullptr;
     QListWidget* mipList_ = nullptr;
     QLabel* infoTitleLabel_ = nullptr;
 
     QLineEdit* inputDirEdit_ = nullptr;
     QLineEdit* outputDirEdit_ = nullptr;
-    QComboBox* formatCombo_ = nullptr;
+    QButtonGroup* formatGroup_ = nullptr;
     QLabel* qualityLabel_ = nullptr;
     QLabel* qualityValueLabel_ = nullptr;
     QSlider* qualitySlider_ = nullptr;
-    QSpinBox* mipSpin_ = nullptr;
     QCheckBox* overwriteCheck_ = nullptr;
     QCheckBox* recursiveCheck_ = nullptr;
+    QAction* associateAction_ = nullptr;
+    QAction* thumbnailAction_ = nullptr;
 
     QLabel* infoLabel_ = nullptr;
     QLabel* zoomLabel_ = nullptr;

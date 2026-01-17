@@ -32,3 +32,25 @@ target_include_directories(blp_viewer PRIVATE
 )
 
 target_link_libraries(blp_viewer PRIVATE ${QT_PACKAGE}::Widgets)
+
+if (WIN32)
+    add_library(blp_thumbnail SHARED
+        shell_ext/blp_thumbnail.cpp
+    )
+
+    target_include_directories(blp_thumbnail PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    )
+
+    target_link_libraries(blp_thumbnail PRIVATE
+        ole32
+        shell32
+        shlwapi
+        gdi32
+    )
+
+    set_target_properties(blp_thumbnail PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
+    )
+endif()
