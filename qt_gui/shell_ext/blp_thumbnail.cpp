@@ -29,6 +29,7 @@ const CLSID CLSID_BlpThumbnailProvider = {
 
 const wchar_t* kThumbnailClsid = L"{27A35239-0B87-4085-8944-463B440D162F}";
 const wchar_t* kThumbnailHandler = L"{E357FCCD-A995-4576-B01F-234630154E96}";
+const wchar_t* kBlpProgId = L"BLPViewer.File";
 
 HINSTANCE g_hInstance = nullptr;
 long g_cDllRef = 0;
@@ -364,11 +365,11 @@ extern "C" BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     return TRUE;
 }
 
-extern "C" HRESULT __stdcall DllCanUnloadNow() {
+STDAPI DllCanUnloadNow(void) {
     return (g_cDllRef == 0) ? S_OK : S_FALSE;
 }
 
-extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {
+STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {
     if (!IsEqualCLSID(rclsid, CLSID_BlpThumbnailProvider)) {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
@@ -382,7 +383,7 @@ extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID rclsid, REFIID riid, voi
     return hr;
 }
 
-extern "C" HRESULT __stdcall DllRegisterServer() {
+STDAPI DllRegisterServer(void) {
     wchar_t modulePath[MAX_PATH] = {};
     if (!GetModuleFileNameW(g_hInstance, modulePath, MAX_PATH)) {
         return HRESULT_FROM_WIN32(GetLastError());
@@ -409,11 +410,21 @@ extern "C" HRESULT __stdcall DllRegisterServer() {
         return E_FAIL;
     }
 
+    wchar_t sfaKey[MAX_PATH] = {};
+    wsprintfW(sfaKey,
+              L"Software\\Classes\\SystemFileAssociations\\.blp\\ShellEx\\%s",
+              kThumbnailHandler);
+    setRegistryString(HKEY_CURRENT_USER, sfaKey, nullptr, kThumbnailClsid);
+
+    wchar_t progKey[MAX_PATH] = {};
+    wsprintfW(progKey, L"Software\\Classes\\%s\\ShellEx\\%s", kBlpProgId, kThumbnailHandler);
+    setRegistryString(HKEY_CURRENT_USER, progKey, nullptr, kThumbnailClsid);
+
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return S_OK;
 }
 
-extern "C" HRESULT __stdcall DllUnregisterServer() {
+STDAPI DllUnregisterServer(void) {
     wchar_t clsidKey[MAX_PATH] = {};
     wsprintfW(clsidKey, L"Software\\Classes\\CLSID\\%s", kThumbnailClsid);
     SHDeleteKeyW(HKEY_CURRENT_USER, clsidKey);
@@ -421,6 +432,16 @@ extern "C" HRESULT __stdcall DllUnregisterServer() {
     wchar_t shellExKey[MAX_PATH] = {};
     wsprintfW(shellExKey, L"Software\\Classes\\.blp\\ShellEx\\%s", kThumbnailHandler);
     SHDeleteKeyW(HKEY_CURRENT_USER, shellExKey);
+
+    wchar_t sfaKey[MAX_PATH] = {};
+    wsprintfW(sfaKey,
+              L"Software\\Classes\\SystemFileAssociations\\.blp\\ShellEx\\%s",
+              kThumbnailHandler);
+    SHDeleteKeyW(HKEY_CURRENT_USER, sfaKey);
+
+    wchar_t progKey[MAX_PATH] = {};
+    wsprintfW(progKey, L"Software\\Classes\\%s\\ShellEx\\%s", kBlpProgId, kThumbnailHandler);
+    SHDeleteKeyW(HKEY_CURRENT_USER, progKey);
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return S_OK;

@@ -27,6 +27,20 @@ void ImageView::setImage(const QImage& image) {
     emit imageChanged(true);
 }
 
+void ImageView::updateImage(const QImage& image) {
+    if (!pixmapItem_) {
+        setImage(image);
+        return;
+    }
+    pixmapItem_->setPixmap(QPixmap::fromImage(image));
+    scene_->setSceneRect(pixmapItem_->boundingRect());
+    if (fitMode_) {
+        fitToImage();
+    } else {
+        centerOn(pixmapItem_);
+    }
+}
+
 void ImageView::clearImage() {
     scene_->clear();
     pixmapItem_ = nullptr;

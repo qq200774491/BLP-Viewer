@@ -1,0 +1,6 @@
+LIBRARY "blp_thumbnail"
+EXPORTS
+    DllCanUnloadNow
+    DllGetClassObject
+    DllRegisterServer
+    DllUnregisterServer

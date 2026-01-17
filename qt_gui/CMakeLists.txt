@@ -36,6 +36,7 @@ target_link_libraries(blp_viewer PRIVATE ${QT_PACKAGE}::Widgets)
 if (WIN32)
     add_library(blp_thumbnail SHARED
         shell_ext/blp_thumbnail.cpp
+        shell_ext/blp_thumbnail.def
     )
 
     target_include_directories(blp_thumbnail PRIVATE

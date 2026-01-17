@@ -14,6 +14,7 @@ public:
     explicit ImageView(QWidget* parent = nullptr);
 
     void setImage(const QImage& image);
+    void updateImage(const QImage& image);
     void clearImage();
     void fitToImage();
     void setZoom(double value);

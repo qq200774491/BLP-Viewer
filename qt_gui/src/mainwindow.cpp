@@ -597,10 +597,13 @@ void MainWindow::setupUi() {
     QLabel* pow2Label = new QLabel("非 2 次幂", pow2Panel_);
     pow2AlignButton_ = new QToolButton(pow2Panel_);
     pow2AlignButton_->setText("拉伸对齐2次幂");
+    pow2AlignButton_->setStyleSheet("color: #1e2127;");
     pow2CenterButton_ = new QToolButton(pow2Panel_);
     pow2CenterButton_->setText("居中对齐2次幂");
+    pow2CenterButton_->setStyleSheet("color: #1e2127;");
     pow2RestoreButton_ = new QToolButton(pow2Panel_);
     pow2RestoreButton_->setText("恢复");
+    pow2RestoreButton_->setStyleSheet("color: #1e2127;");
     pow2Layout->addWidget(pow2Label);
     pow2Layout->addWidget(pow2AlignButton_);
     pow2Layout->addWidget(pow2CenterButton_);
@@ -612,13 +615,20 @@ void MainWindow::setupUi() {
     QHBoxLayout* backgroundLayout = new QHBoxLayout(backgroundPanel);
     backgroundLayout->setContentsMargins(8, 4, 8, 4);
     backgroundLayout->setSpacing(6);
+    alphaToggle_ = new QToolButton(backgroundPanel);
+    alphaToggle_->setText("显示透明通道");
+    alphaToggle_->setCheckable(true);
+    alphaToggle_->setChecked(false);
+    alphaToggle_->setStyleSheet("color: #1e2127;");
     backgroundButton_ = new QToolButton(backgroundPanel);
     backgroundButton_->setText("背景");
     backgroundButton_->setPopupMode(QToolButton::InstantPopup);
+    backgroundButton_->setStyleSheet("color: #1e2127;");
     QMenu* backgroundMenu = new QMenu(backgroundButton_);
     QAction* pickBackgroundAction = backgroundMenu->addAction("选择颜色");
     QAction* resetBackgroundAction = backgroundMenu->addAction("恢复默认");
     backgroundButton_->setMenu(backgroundMenu);
+    backgroundLayout->addWidget(alphaToggle_);
     backgroundLayout->addWidget(backgroundButton_);
 
     overlayLayout->addWidget(pow2Panel_);
@@ -697,6 +707,7 @@ void MainWindow::setupUi() {
     connect(pow2AlignButton_, &QToolButton::clicked, this, &MainWindow::onAlignPow2);
     connect(pow2CenterButton_, &QToolButton::clicked, this, &MainWindow::onCenterPow2);
     connect(pow2RestoreButton_, &QToolButton::clicked, this, &MainWindow::onRestorePow2);
+    connect(alphaToggle_, &QToolButton::toggled, this, &MainWindow::onAlphaToggled);
     connect(pickBackgroundAction, &QAction::triggered, this, &MainWindow::onPickPreviewBackground);
     connect(resetBackgroundAction, &QAction::triggered, this, &MainWindow::onResetPreviewBackground);
     connect(imageView_, &ImageView::zoomChanged, this, [this](double zoom) {
@@ -810,6 +821,10 @@ void MainWindow::applyStyle() {
         "}"
         "QWidget#previewOverlay QToolButton:hover {"
         "  background: #eef2f8;"
+        "  border-radius: 6px;"
+        "}"
+        "QWidget#previewOverlay QToolButton:checked {"
+        "  background: #dfe6f2;"
         "  border-radius: 6px;"
         "}"
         "QWidget#previewOverlay QToolButton:disabled {"
@@ -1035,6 +1050,19 @@ void MainWindow::onFitClicked() {
 
 void MainWindow::onResetZoomClicked() {
     imageView_->setZoom(1.0);
+}
+
+void MainWindow::onAlphaToggled(bool enabled) {
+    previewUseAlpha_ = enabled;
+    if (!currentIsBlp_ || previewOriginalImage_.isNull()) {
+        updateAlphaToggle();
+        return;
+    }
+
+    const QImage base = (previewAdjusted_ && !previewAdjustedImage_.isNull())
+                            ? previewAdjustedImage_
+                            : previewOriginalImage_;
+    imageView_->updateImage(applyPreviewAlpha(base));
 }
 
 void MainWindow::onPickPreviewBackground() {
@@ -1485,6 +1513,18 @@ void MainWindow::updatePow2Overlay() {
     }
 }
 
+void MainWindow::updateAlphaToggle() {
+    if (!alphaToggle_) {
+        return;
+    }
+    const bool enabled = currentIsBlp_ && !previewOriginalImage_.isNull();
+    alphaToggle_->setVisible(enabled);
+    alphaToggle_->setEnabled(enabled);
+    alphaToggle_->blockSignals(true);
+    alphaToggle_->setChecked(previewUseAlpha_);
+    alphaToggle_->blockSignals(false);
+}
+
 bool MainWindow::saveAlignedToSource(const QImage& image, QString* outError) {
     if (currentPreviewPath_.isEmpty()) {
         if (outError) {
@@ -1562,7 +1602,7 @@ bool MainWindow::saveAlignedToSource(const QImage& image, QString* outError) {
 }
 
 void MainWindow::setPreviewImage(const QImage& image, bool adjusted) {
-    imageView_->setImage(image);
+    imageView_->setImage(applyPreviewAlpha(image));
     previewAdjusted_ = adjusted;
     if (adjusted) {
         previewAdjustedImage_ = image;
@@ -1576,6 +1616,24 @@ void MainWindow::setPreviewImage(const QImage& image, bool adjusted) {
     const int mipIndex = currentIsBlp_ ? currentMipIndex_ : -1;
     setInfoText(displayMeta, mipIndex);
     updatePow2Overlay();
+    updateAlphaToggle();
+}
+
+QImage MainWindow::applyPreviewAlpha(const QImage& image) const {
+    if (!currentIsBlp_ || previewUseAlpha_) {
+        return image;
+    }
+
+    QImage adjusted = image.convertToFormat(QImage::Format_RGBA8888);
+    const int height = adjusted.height();
+    const int stride = adjusted.bytesPerLine();
+    for (int y = 0; y < height; ++y) {
+        uchar* row = adjusted.scanLine(y);
+        for (int x = 0; x < stride; x += 4) {
+            row[x + 3] = 255;
+        }
+    }
+    return adjusted;
 }
 
 void MainWindow::setInfoText(const ImageMeta& meta, int mipIndex) {
@@ -1632,6 +1690,7 @@ void MainWindow::clearPreviewState() {
         infoTitleLabel_->setStyleSheet(kInfoNormalStyle);
     }
     updatePow2Overlay();
+    updateAlphaToggle();
 }
 
 void MainWindow::logMessage(const QString& message) {

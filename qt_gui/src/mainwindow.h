@@ -72,6 +72,7 @@ private slots:
     void onAlignPow2();
     void onCenterPow2();
     void onRestorePow2();
+    void onAlphaToggled(bool enabled);
 
 private:
     void setupUi();
@@ -84,6 +85,7 @@ private:
     void updateAssociationAction();
     void updateThumbnailAction();
     void updatePow2Overlay();
+    void updateAlphaToggle();
     void logMessage(const QString& message);
     void refreshMipList(const QByteArray& bytes);
     bool saveAlignedToSource(const QImage& image, QString* outError);
@@ -92,6 +94,7 @@ private:
     void setInfoText(const ImageMeta& meta, int mipIndex);
     void clearPreviewState();
     void setPreviewImage(const QImage& image, bool adjusted);
+    QImage applyPreviewAlpha(const QImage& image) const;
 
     FileListWidget* fileList_ = nullptr;
     ImageView* imageView_ = nullptr;
@@ -122,6 +125,7 @@ private:
     QToolButton* pow2CenterButton_ = nullptr;
     QToolButton* pow2RestoreButton_ = nullptr;
     QToolButton* backgroundButton_ = nullptr;
+    QToolButton* alphaToggle_ = nullptr;
 
     QSet<QString> fileSet_;
     QByteArray currentBlpBytes_;
@@ -133,6 +137,7 @@ private:
     ImageMeta originalMeta_;
     bool hasOriginalBackup_ = false;
     bool previewAdjusted_ = false;
+    bool previewUseAlpha_ = false;
     bool currentIsBlp_ = false;
     int currentMipIndex_ = 0;
     BlpApi blpApi_;
