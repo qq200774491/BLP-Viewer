@@ -132,6 +132,8 @@ Push-Location $repoRoot
 $cmakeArgs = @("-S", "qt_gui", "-B", $BuildDir, "-DCMAKE_PREFIX_PATH=$qtPrefix", "-DCMAKE_BUILD_TYPE=$Config")
 if ($BlpStatic) {
     $cmakeArgs += "-DBLP_STATIC_LINK=ON"
+} else {
+    $cmakeArgs += "-DBLP_STATIC_LINK=OFF"
 }
 if (-not [string]::IsNullOrWhiteSpace($Generator)) {
     $cmakeArgs += @("-G", $Generator)
