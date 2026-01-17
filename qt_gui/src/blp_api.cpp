@@ -119,13 +119,46 @@ bool BlpApi::encodePngBytesToBlp(const QByteArray& pngBytes,
     return true;
 }
 
+bool BlpApi::decodeMipToPngFromBuffer(const QByteArray& blpBytes,
+                                      int mipIndex,
+                                      const QString& outputPath,
+                                      QString* outError) {
+    if (!decodeMipToPngFromBuffer_) {
+        if (outError) {
+            *outError = "BLP 解码入口缺失";
+        }
+        return false;
+    }
+
+    const uint32_t clampedMip = static_cast<uint32_t>(qMax(0, mipIndex));
+    const QByteArray pathUtf8 = QDir::toNativeSeparators(outputPath).toUtf8();
+
+    const BlpResult result = decodeMipToPngFromBuffer_(
+        reinterpret_cast<const uint8_t*>(blpBytes.constData()),
+        static_cast<uint32_t>(blpBytes.size()),
+        clampedMip,
+        pathUtf8.constData());
+
+    if (result != BLP_SUCCESS) {
+        if (outError) {
+            *outError = "BLP 层级解码失败";
+        }
+        return false;
+    }
+
+    return true;
+}
+
 bool BlpApi::resolveSymbols(QString* outError) {
     loadFromBuffer_ = reinterpret_cast<LoadFromBufferFn>(lib_.resolve("blp_load_from_buffer"));
     freeImage_ = reinterpret_cast<FreeImageFn>(lib_.resolve("blp_free_image"));
     getVersion_ = reinterpret_cast<GetVersionFn>(lib_.resolve("blp_get_version"));
     encodeBytesToBlp_ = reinterpret_cast<EncodeBytesToBlpFn>(lib_.resolve("blp_encode_bytes_to_blp"));
+    decodeMipToPngFromBuffer_ = reinterpret_cast<DecodeMipToPngFromBufferFn>(
+        lib_.resolve("blp_decode_mip_to_png_from_buffer"));
 
-    if (!loadFromBuffer_ || !freeImage_ || !getVersion_ || !encodeBytesToBlp_) {
+    if (!loadFromBuffer_ || !freeImage_ || !getVersion_ || !encodeBytesToBlp_ ||
+        !decodeMipToPngFromBuffer_) {
         if (outError) {
             *outError = "解析 BLP 符号失败";
         }

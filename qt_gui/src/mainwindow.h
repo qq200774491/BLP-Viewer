@@ -5,6 +5,7 @@
 #include <QSet>
 
 #include "blp_api.h"
+#include "image_io.h"
 
 class QLabel;
 class QLineEdit;
@@ -50,12 +51,14 @@ protected:
 private slots:
     void onAddFiles();
     void onAddFolder();
+    void onScanInputDir();
     void onRemoveSelected();
     void onClearList();
     void onBrowseInputDir();
     void onBrowseOutputDir();
     void onConvertAll();
     void onSelectionChanged(QListWidgetItem* current, QListWidgetItem* previous);
+    void onMipSelectionChanged(QListWidgetItem* current, QListWidgetItem* previous);
     void onFormatChanged();
     void onZoomSliderChanged(int value);
     void onFitClicked();
@@ -72,9 +75,13 @@ private:
     void logMessage(const QString& message);
     QString buildOutputPath(const QString& inputPath, const QString& format, bool overwrite) const;
     QString normalizedFormat() const;
+    void setInfoText(const ImageMeta& meta, int mipIndex);
+    void clearPreviewState();
 
     FileListWidget* fileList_ = nullptr;
     ImageView* imageView_ = nullptr;
+    QListWidget* mipList_ = nullptr;
+    QLabel* infoTitleLabel_ = nullptr;
 
     QLineEdit* inputDirEdit_ = nullptr;
     QLineEdit* outputDirEdit_ = nullptr;
@@ -94,5 +101,9 @@ private:
     QSlider* zoomSlider_ = nullptr;
 
     QSet<QString> fileSet_;
+    QByteArray currentBlpBytes_;
+    ImageMeta currentMeta_;
+    bool currentIsBlp_ = false;
+    int currentMipIndex_ = 0;
     BlpApi blpApi_;
 };
