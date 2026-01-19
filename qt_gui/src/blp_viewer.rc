@@ -1,6 +1,9 @@
 #pragma code_page(65001)
 #include <winver.h>
 
+#define IDI_APP_ICON 101
+IDI_APP_ICON ICON "blp_viewer.ico"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,1,1,0
  PRODUCTVERSION 0,1,1,0
