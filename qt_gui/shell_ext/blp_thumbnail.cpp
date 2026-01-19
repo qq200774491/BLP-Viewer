@@ -9,10 +9,17 @@
 #include <objidl.h>
 
 #include <algorithm>
+#include <cstring>
+#include <limits>
 #include <new>
 #include <vector>
 
 #include "blp_lib.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_TGA
+#define STBI_NO_STDIO
+#include "stb_image.h"
 
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "ole32.lib")
@@ -42,6 +49,13 @@ blp_load_from_buffer_fn g_blpLoad = nullptr;
 blp_free_image_fn g_blpFree = nullptr;
 
 bool ensureBlpLoaded() {
+#ifdef BLP_STATIC_LINK
+    if (!g_blpLoad || !g_blpFree) {
+        g_blpLoad = &blp_load_from_buffer;
+        g_blpFree = &blp_free_image;
+    }
+    return g_blpLoad && g_blpFree;
+#else
     if (g_blpModule && g_blpLoad && g_blpFree) {
         return true;
     }
@@ -86,6 +100,7 @@ bool ensureBlpLoaded() {
         GetProcAddress(g_blpModule, "blp_free_image"));
 
     return g_blpLoad && g_blpFree;
+#endif
 }
 
 HRESULT readStream(IStream* stream, std::vector<uint8_t>& outBytes) {
@@ -119,6 +134,13 @@ HRESULT readStream(IStream* stream, std::vector<uint8_t>& outBytes) {
     return S_OK;
 }
 
+bool isBlpBytes(const std::vector<uint8_t>& bytes) {
+    if (bytes.size() < 4) {
+        return false;
+    }
+    return std::memcmp(bytes.data(), "BLP1", 4) == 0 || std::memcmp(bytes.data(), "BLP2", 4) == 0;
+}
+
 std::vector<uint8_t> rgbaToBgra(const uint8_t* rgba, size_t pixelCount) {
     std::vector<uint8_t> bgra(pixelCount * 4);
     for (size_t i = 0; i < pixelCount; ++i) {
@@ -131,15 +153,15 @@ std::vector<uint8_t> rgbaToBgra(const uint8_t* rgba, size_t pixelCount) {
     return bgra;
 }
 
-HBITMAP createThumbnailBitmap(const BlpImage& image, UINT cx) {
-    if (image.width == 0 || image.height == 0 || !image.data) {
+HBITMAP createThumbnailBitmapFromRgba(const uint8_t* rgba, int width, int height, UINT cx) {
+    if (!rgba || width <= 0 || height <= 0 || cx == 0) {
         return nullptr;
     }
 
     const double scale =
-        std::min(static_cast<double>(cx) / image.width, static_cast<double>(cx) / image.height);
-    const int destW = std::max(1, static_cast<int>(image.width * scale));
-    const int destH = std::max(1, static_cast<int>(image.height * scale));
+        std::min(static_cast<double>(cx) / width, static_cast<double>(cx) / height);
+    const int destW = std::max(1, static_cast<int>(width * scale));
+    const int destH = std::max(1, static_cast<int>(height * scale));
 
     BITMAPINFO destInfo = {};
     destInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -155,13 +177,13 @@ HBITMAP createThumbnailBitmap(const BlpImage& image, UINT cx) {
         return nullptr;
     }
 
-    const size_t pixelCount = static_cast<size_t>(image.width) * image.height;
-    const std::vector<uint8_t> bgra = rgbaToBgra(image.data, pixelCount);
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const std::vector<uint8_t> bgra = rgbaToBgra(rgba, pixelCount);
 
     BITMAPINFO srcInfo = {};
     srcInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    srcInfo.bmiHeader.biWidth = static_cast<int>(image.width);
-    srcInfo.bmiHeader.biHeight = -static_cast<int>(image.height);
+    srcInfo.bmiHeader.biWidth = width;
+    srcInfo.bmiHeader.biHeight = -height;
     srcInfo.bmiHeader.biPlanes = 1;
     srcInfo.bmiHeader.biBitCount = 32;
     srcInfo.bmiHeader.biCompression = BI_RGB;
@@ -178,8 +200,8 @@ HBITMAP createThumbnailBitmap(const BlpImage& image, UINT cx) {
                   destH,
                   0,
                   0,
-                  static_cast<int>(image.width),
-                  static_cast<int>(image.height),
+                  width,
+                  height,
                   bgra.data(),
                   &srcInfo,
                   DIB_RGB_COLORS,
@@ -188,6 +210,70 @@ HBITMAP createThumbnailBitmap(const BlpImage& image, UINT cx) {
     DeleteDC(hdc);
 
     return hbmp;
+}
+
+HBITMAP createThumbnailBitmap(const BlpImage& image, UINT cx) {
+    return createThumbnailBitmapFromRgba(image.data,
+                                         static_cast<int>(image.width),
+                                         static_cast<int>(image.height),
+                                         cx);
+}
+
+bool tryDecodeBlp(const std::vector<uint8_t>& bytes, UINT cx, HBITMAP* outBmp) {
+    if (!outBmp || !isBlpBytes(bytes)) {
+        return false;
+    }
+    if (!ensureBlpLoaded()) {
+        return false;
+    }
+    if (bytes.size() > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+
+    BlpImage image = {};
+    if (g_blpLoad(bytes.data(), static_cast<uint32_t>(bytes.size()), &image) != BLP_SUCCESS) {
+        return false;
+    }
+
+    HBITMAP hbmp = createThumbnailBitmap(image, cx);
+    g_blpFree(&image);
+    if (!hbmp) {
+        return false;
+    }
+
+    *outBmp = hbmp;
+    return true;
+}
+
+bool tryDecodeTga(const std::vector<uint8_t>& bytes, UINT cx, HBITMAP* outBmp) {
+    if (!outBmp) {
+        return false;
+    }
+    if (bytes.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+
+    int width = 0;
+    int height = 0;
+    int comp = 0;
+    stbi_uc* data = stbi_load_from_memory(bytes.data(),
+                                          static_cast<int>(bytes.size()),
+                                          &width,
+                                          &height,
+                                          &comp,
+                                          4);
+    if (!data) {
+        return false;
+    }
+
+    HBITMAP hbmp = createThumbnailBitmapFromRgba(data, width, height, cx);
+    stbi_image_free(data);
+    if (!hbmp) {
+        return false;
+    }
+
+    *outBmp = hbmp;
+    return true;
 }
 
 class BlpThumbnailProvider : public IInitializeWithStream, public IThumbnailProvider {
@@ -250,23 +336,17 @@ public:
         *phbmp = nullptr;
         *pdwAlpha = WTSAT_UNKNOWN;
 
-        if (!ensureBlpLoaded()) {
-            return E_FAIL;
-        }
-
         std::vector<uint8_t> bytes;
         HRESULT hr = readStream(stream_, bytes);
         if (FAILED(hr)) {
             return hr;
         }
 
-        BlpImage image = {};
-        if (g_blpLoad(bytes.data(), static_cast<uint32_t>(bytes.size()), &image) != BLP_SUCCESS) {
+        HBITMAP hbmp = nullptr;
+        if (!tryDecodeBlp(bytes, cx, &hbmp) && !tryDecodeTga(bytes, cx, &hbmp)) {
             return E_FAIL;
         }
 
-        HBITMAP hbmp = createThumbnailBitmap(image, cx);
-        g_blpFree(&image);
         if (!hbmp) {
             return E_FAIL;
         }
@@ -420,6 +500,16 @@ STDAPI DllRegisterServer(void) {
     wsprintfW(progKey, L"Software\\Classes\\%s\\ShellEx\\%s", kBlpProgId, kThumbnailHandler);
     setRegistryString(HKEY_CURRENT_USER, progKey, nullptr, kThumbnailClsid);
 
+    wchar_t tgaShellExKey[MAX_PATH] = {};
+    wsprintfW(tgaShellExKey, L"Software\\Classes\\.tga\\ShellEx\\%s", kThumbnailHandler);
+    setRegistryString(HKEY_CURRENT_USER, tgaShellExKey, nullptr, kThumbnailClsid);
+
+    wchar_t tgaSfaKey[MAX_PATH] = {};
+    wsprintfW(tgaSfaKey,
+              L"Software\\Classes\\SystemFileAssociations\\.tga\\ShellEx\\%s",
+              kThumbnailHandler);
+    setRegistryString(HKEY_CURRENT_USER, tgaSfaKey, nullptr, kThumbnailClsid);
+
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return S_OK;
 }
@@ -442,6 +532,16 @@ STDAPI DllUnregisterServer(void) {
     wchar_t progKey[MAX_PATH] = {};
     wsprintfW(progKey, L"Software\\Classes\\%s\\ShellEx\\%s", kBlpProgId, kThumbnailHandler);
     SHDeleteKeyW(HKEY_CURRENT_USER, progKey);
+
+    wchar_t tgaShellExKey[MAX_PATH] = {};
+    wsprintfW(tgaShellExKey, L"Software\\Classes\\.tga\\ShellEx\\%s", kThumbnailHandler);
+    SHDeleteKeyW(HKEY_CURRENT_USER, tgaShellExKey);
+
+    wchar_t tgaSfaKey[MAX_PATH] = {};
+    wsprintfW(tgaSfaKey,
+              L"Software\\Classes\\SystemFileAssociations\\.tga\\ShellEx\\%s",
+              kThumbnailHandler);
+    SHDeleteKeyW(HKEY_CURRENT_USER, tgaSfaKey);
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return S_OK;

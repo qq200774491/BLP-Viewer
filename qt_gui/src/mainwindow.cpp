@@ -703,7 +703,7 @@ void MainWindow::setupUi() {
     toolBar->setFloatable(false);
     addToolBar(Qt::TopToolBarArea, toolBar);
     associateAction_ = toolBar->addAction("关联 BLP 打开方式");
-    thumbnailAction_ = toolBar->addAction("资源管理器缩略图");
+    thumbnailAction_ = toolBar->addAction("资源管理器缩略图（BLP/TGA）");
     thumbnailAction_->setCheckable(true);
 
     infoLabel_ = new QLabel("未加载图像", this);
@@ -1284,7 +1284,8 @@ void MainWindow::onThumbnailToggled(bool enabled) {
         QDir(QCoreApplication::applicationDirPath()).filePath("blp_thumbnail.dll");
     const char* entry = enabled ? "DllRegisterServer" : "DllUnregisterServer";
     if (callDllEntry(dllPath, entry, &error)) {
-        logMessage(enabled ? "已启用资源管理器缩略图" : "已关闭资源管理器缩略图");
+        logMessage(enabled ? "已启用资源管理器缩略图（BLP/TGA）"
+                           : "已关闭资源管理器缩略图（BLP/TGA）");
     } else {
         logMessage(QString("%1：%2")
                        .arg(enabled ? "启用缩略图失败" : "关闭缩略图失败")
@@ -1583,7 +1584,7 @@ void MainWindow::updateThumbnailAction() {
     const QString dllPath =
         QDir(QCoreApplication::applicationDirPath()).filePath("blp_thumbnail.dll");
     if (!QFileInfo::exists(dllPath)) {
-        thumbnailAction_->setText("资源管理器缩略图（缺少 DLL）");
+        thumbnailAction_->setText("资源管理器缩略图（BLP/TGA，缺少 DLL）");
         thumbnailAction_->setEnabled(false);
         thumbnailAction_->setChecked(false);
         return;
@@ -1592,10 +1593,11 @@ void MainWindow::updateThumbnailAction() {
     thumbnailAction_->blockSignals(true);
     thumbnailAction_->setChecked(registered);
     thumbnailAction_->blockSignals(false);
-    thumbnailAction_->setText(registered ? "资源管理器缩略图已启用" : "资源管理器缩略图");
+    thumbnailAction_->setText(registered ? "资源管理器缩略图已启用（BLP/TGA）"
+                                         : "资源管理器缩略图（BLP/TGA）");
     thumbnailAction_->setEnabled(true);
 #else
-    thumbnailAction_->setText("资源管理器缩略图（仅 Windows）");
+    thumbnailAction_->setText("资源管理器缩略图（BLP/TGA，仅 Windows）");
     thumbnailAction_->setEnabled(false);
     thumbnailAction_->setChecked(false);
 #endif

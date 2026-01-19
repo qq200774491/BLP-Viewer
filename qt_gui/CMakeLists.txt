@@ -17,13 +17,20 @@ else()
     set(QT_PACKAGE Qt5)
 endif()
 
-add_executable(blp_viewer
+set(BLP_VIEWER_SOURCES
     src/main.cpp
     src/mainwindow.cpp
     src/image_io.cpp
     src/blp_api.cpp
     src/imageview.cpp
 )
+
+if (WIN32)
+    list(APPEND BLP_VIEWER_SOURCES src/blp_viewer.rc)
+    add_executable(blp_viewer WIN32 ${BLP_VIEWER_SOURCES})
+else()
+    add_executable(blp_viewer ${BLP_VIEWER_SOURCES})
+endif()
 
 option(BLP_STATIC_LINK "Link BLP library statically" OFF)
 
@@ -62,6 +69,7 @@ if (WIN32)
 
     target_include_directories(blp_thumbnail PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
     )
 
     target_link_libraries(blp_thumbnail PRIVATE
@@ -70,6 +78,17 @@ if (WIN32)
         shlwapi
         gdi32
     )
+
+    if (BLP_STATIC_LINK)
+        target_compile_definitions(blp_thumbnail PRIVATE BLP_STATIC_LINK)
+
+        if (EXISTS "${BLP_STATIC_LIB}")
+            target_link_libraries(blp_thumbnail PRIVATE "${BLP_STATIC_LIB}")
+            target_link_libraries(blp_thumbnail PRIVATE ws2_32 ntdll)
+        else()
+            message(FATAL_ERROR "BLP static library not found: ${BLP_STATIC_LIB}. Build it with cargo build --release.")
+        endif()
+    endif()
 
     set_target_properties(blp_thumbnail PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>
