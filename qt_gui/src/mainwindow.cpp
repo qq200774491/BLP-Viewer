@@ -142,6 +142,22 @@ int autoMipCount(int width, int height) {
     return count;
 }
 
+int snapResizeValue(int value) {
+    constexpr int kSnapTargets[] = {64, 128, 256, 512};
+    constexpr int kSnapDistance = 8;
+
+    int best = value;
+    int bestDistance = kSnapDistance + 1;
+    for (int target : kSnapTargets) {
+        const int dist = qAbs(value - target);
+        if (dist <= kSnapDistance && dist < bestDistance) {
+            best = target;
+            bestDistance = dist;
+        }
+    }
+    return best;
+}
+
 const char* kBlpProgId = "BLPViewer.File";
 const char* kThumbnailClsid = "{27A35239-0B87-4085-8944-463B440D162F}";
 const char* kThumbnailHandler = "{E357FCCD-A995-4576-B01F-234630154E96}";
@@ -744,24 +760,56 @@ void MainWindow::setupUi() {
     rightLayout->addWidget(mipGroup_);
 
     resizeGroup_ = new QGroupBox("调整图像大小", rightPanel);
-    QHBoxLayout* resizeLayout = new QHBoxLayout(resizeGroup_);
+    QVBoxLayout* resizeLayout = new QVBoxLayout(resizeGroup_);
     resizeLayout->setContentsMargins(8, 6, 8, 6);
     resizeLayout->setSpacing(6);
-    QLabel* resizeWidthLabel = new QLabel("宽", resizeGroup_);
-    resizeWidthSpin_ = new QSpinBox(resizeGroup_);
+
+    QWidget* resizeWidthRow = new QWidget(resizeGroup_);
+    QHBoxLayout* resizeWidthLayout = new QHBoxLayout(resizeWidthRow);
+    resizeWidthLayout->setContentsMargins(0, 0, 0, 0);
+    resizeWidthLayout->setSpacing(6);
+    QLabel* resizeWidthLabel = new QLabel("宽", resizeWidthRow);
+    resizeWidthSlider_ = new QSlider(Qt::Horizontal, resizeWidthRow);
+    resizeWidthSlider_->setRange(1, 16384);
+    resizeWidthSlider_->setPageStep(64);
+    resizeWidthSpin_ = new QSpinBox(resizeWidthRow);
     resizeWidthSpin_->setRange(1, 16384);
     resizeWidthSpin_->setSuffix(" px");
-    QLabel* resizeHeightLabel = new QLabel("高", resizeGroup_);
-    resizeHeightSpin_ = new QSpinBox(resizeGroup_);
+    resizeWidthSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    resizeWidthLayout->addWidget(resizeWidthLabel);
+    resizeWidthLayout->addWidget(resizeWidthSlider_, 1);
+    resizeWidthLayout->addWidget(resizeWidthSpin_);
+
+    QWidget* resizeHeightRow = new QWidget(resizeGroup_);
+    QHBoxLayout* resizeHeightLayout = new QHBoxLayout(resizeHeightRow);
+    resizeHeightLayout->setContentsMargins(0, 0, 0, 0);
+    resizeHeightLayout->setSpacing(6);
+    QLabel* resizeHeightLabel = new QLabel("高", resizeHeightRow);
+    resizeHeightSlider_ = new QSlider(Qt::Horizontal, resizeHeightRow);
+    resizeHeightSlider_->setRange(1, 16384);
+    resizeHeightSlider_->setPageStep(64);
+    resizeHeightSpin_ = new QSpinBox(resizeHeightRow);
     resizeHeightSpin_->setRange(1, 16384);
     resizeHeightSpin_->setSuffix(" px");
-    resizeSaveButton_ = new QPushButton("调整并保存", resizeGroup_);
-    resizeLayout->addWidget(resizeWidthLabel);
-    resizeLayout->addWidget(resizeWidthSpin_);
-    resizeLayout->addWidget(resizeHeightLabel);
-    resizeLayout->addWidget(resizeHeightSpin_);
-    resizeLayout->addStretch(1);
-    resizeLayout->addWidget(resizeSaveButton_);
+    resizeHeightSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    resizeHeightLayout->addWidget(resizeHeightLabel);
+    resizeHeightLayout->addWidget(resizeHeightSlider_, 1);
+    resizeHeightLayout->addWidget(resizeHeightSpin_);
+
+    QWidget* resizeActionRow = new QWidget(resizeGroup_);
+    QHBoxLayout* resizeActionLayout = new QHBoxLayout(resizeActionRow);
+    resizeActionLayout->setContentsMargins(0, 0, 0, 0);
+    resizeActionLayout->setSpacing(6);
+    resizeLockAspectCheck_ = new QCheckBox("锁定宽高比", resizeActionRow);
+    resizeLockAspectCheck_->setChecked(true);
+    resizeSaveButton_ = new QPushButton("调整并保存", resizeActionRow);
+    resizeActionLayout->addWidget(resizeLockAspectCheck_);
+    resizeActionLayout->addStretch(1);
+    resizeActionLayout->addWidget(resizeSaveButton_);
+
+    resizeLayout->addWidget(resizeWidthRow);
+    resizeLayout->addWidget(resizeHeightRow);
+    resizeLayout->addWidget(resizeActionRow);
     resizeGroup_->setVisible(false);
     rightLayout->addWidget(resizeGroup_);
 
@@ -826,6 +874,10 @@ void MainWindow::setupUi() {
     connect(pow2AlignButton_, &QToolButton::clicked, this, &MainWindow::onAlignPow2);
     connect(pow2CenterButton_, &QToolButton::clicked, this, &MainWindow::onCenterPow2);
     connect(pow2RestoreButton_, &QToolButton::clicked, this, &MainWindow::onRestorePow2);
+    connect(resizeWidthSlider_, &QSlider::valueChanged, this, &MainWindow::onResizeWidthSliderChanged);
+    connect(resizeHeightSlider_, &QSlider::valueChanged, this, &MainWindow::onResizeHeightSliderChanged);
+    connect(resizeWidthSpin_, &QSpinBox::valueChanged, this, &MainWindow::onResizeWidthChanged);
+    connect(resizeHeightSpin_, &QSpinBox::valueChanged, this, &MainWindow::onResizeHeightChanged);
     connect(resizeSaveButton_, &QPushButton::clicked, this, &MainWindow::onResizeAndSave);
     connect(alphaToggle_, &QToolButton::toggled, this, &MainWindow::onAlphaToggled);
     connect(pickBackgroundAction, &QAction::triggered, this, &MainWindow::onPickPreviewBackground);
@@ -1376,9 +1428,7 @@ void MainWindow::onResizeAndSave() {
         return;
     }
 
-    const QImage sourceImage = (previewAdjusted_ && !previewAdjustedImage_.isNull())
-                                   ? previewAdjustedImage_
-                                   : previewOriginalImage_;
+    const QImage sourceImage = currentResizeSourceImage();
 
     if (sourceImage.width() == targetWidth && sourceImage.height() == targetHeight) {
         logMessage("尺寸未变化，无需保存");
@@ -1396,6 +1446,98 @@ void MainWindow::onResizeAndSave() {
         return;
     }
     logMessage(QString("已调整图像尺寸并保存：%1 x %2").arg(targetWidth).arg(targetHeight));
+}
+
+void MainWindow::onResizeWidthChanged(int value) {
+    if (!resizeWidthSlider_ || !resizeHeightSpin_ || resizeAspectSyncing_) {
+        return;
+    }
+
+    resizeAspectSyncing_ = true;
+    if (resizeWidthSlider_->value() != value) {
+        resizeWidthSlider_->setValue(value);
+    }
+    resizeAspectSyncing_ = false;
+
+    if (!resizeLockAspectCheck_ || !resizeLockAspectCheck_->isChecked()) {
+        return;
+    }
+
+    const QImage source = currentResizeSourceImage();
+    if (source.isNull() || source.width() <= 0 || source.height() <= 0 || value <= 0) {
+        return;
+    }
+
+    const qint64 scaled = static_cast<qint64>(value) * static_cast<qint64>(source.height());
+    const int newHeight = qMax(1, static_cast<int>((scaled + source.width() / 2) / source.width()));
+
+    resizeAspectSyncing_ = true;
+    resizeHeightSpin_->setValue(newHeight);
+    if (resizeHeightSlider_) {
+        resizeHeightSlider_->setValue(newHeight);
+    }
+    resizeAspectSyncing_ = false;
+}
+
+void MainWindow::onResizeHeightChanged(int value) {
+    if (!resizeHeightSlider_ || !resizeWidthSpin_ || resizeAspectSyncing_) {
+        return;
+    }
+
+    resizeAspectSyncing_ = true;
+    if (resizeHeightSlider_->value() != value) {
+        resizeHeightSlider_->setValue(value);
+    }
+    resizeAspectSyncing_ = false;
+
+    if (!resizeLockAspectCheck_ || !resizeLockAspectCheck_->isChecked()) {
+        return;
+    }
+
+    const QImage source = currentResizeSourceImage();
+    if (source.isNull() || source.width() <= 0 || source.height() <= 0 || value <= 0) {
+        return;
+    }
+
+    const qint64 scaled = static_cast<qint64>(value) * static_cast<qint64>(source.width());
+    const int newWidth = qMax(1, static_cast<int>((scaled + source.height() / 2) / source.height()));
+
+    resizeAspectSyncing_ = true;
+    resizeWidthSpin_->setValue(newWidth);
+    if (resizeWidthSlider_) {
+        resizeWidthSlider_->setValue(newWidth);
+    }
+    resizeAspectSyncing_ = false;
+}
+
+void MainWindow::onResizeWidthSliderChanged(int value) {
+    if (!resizeWidthSpin_ || !resizeWidthSlider_ || resizeAspectSyncing_) {
+        return;
+    }
+
+    const int snapped = snapResizeValue(value);
+    if (snapped != value) {
+        resizeAspectSyncing_ = true;
+        resizeWidthSlider_->setValue(snapped);
+        resizeAspectSyncing_ = false;
+    }
+
+    resizeWidthSpin_->setValue(snapped);
+}
+
+void MainWindow::onResizeHeightSliderChanged(int value) {
+    if (!resizeHeightSpin_ || !resizeHeightSlider_ || resizeAspectSyncing_) {
+        return;
+    }
+
+    const int snapped = snapResizeValue(value);
+    if (snapped != value) {
+        resizeAspectSyncing_ = true;
+        resizeHeightSlider_->setValue(snapped);
+        resizeAspectSyncing_ = false;
+    }
+
+    resizeHeightSpin_->setValue(snapped);
 }
 
 void MainWindow::onAssociateBlp() {
@@ -1874,6 +2016,12 @@ void MainWindow::setPreviewImage(const QImage& image, bool adjusted) {
     updateAlphaToggle();
 }
 
+QImage MainWindow::currentResizeSourceImage() const {
+    return (previewAdjusted_ && !previewAdjustedImage_.isNull())
+               ? previewAdjustedImage_
+               : previewOriginalImage_;
+}
+
 void MainWindow::updateResizeControls() {
     if (!resizeGroup_) {
         return;
@@ -1885,22 +2033,33 @@ void MainWindow::updateResizeControls() {
         return;
     }
 
-    const QImage base = (previewAdjusted_ && !previewAdjustedImage_.isNull())
-                            ? previewAdjustedImage_
-                            : previewOriginalImage_;
+    const QImage base = currentResizeSourceImage();
 
     if (resizeWidthSpin_) {
         resizeWidthSpin_->blockSignals(true);
         resizeWidthSpin_->setValue(qMax(1, base.width()));
         resizeWidthSpin_->blockSignals(false);
     }
+    if (resizeWidthSlider_) {
+        resizeWidthSlider_->blockSignals(true);
+        resizeWidthSlider_->setValue(qMax(1, base.width()));
+        resizeWidthSlider_->blockSignals(false);
+    }
     if (resizeHeightSpin_) {
         resizeHeightSpin_->blockSignals(true);
         resizeHeightSpin_->setValue(qMax(1, base.height()));
         resizeHeightSpin_->blockSignals(false);
     }
+    if (resizeHeightSlider_) {
+        resizeHeightSlider_->blockSignals(true);
+        resizeHeightSlider_->setValue(qMax(1, base.height()));
+        resizeHeightSlider_->blockSignals(false);
+    }
     if (resizeSaveButton_) {
         resizeSaveButton_->setEnabled(!currentPreviewPath_.isEmpty());
+    }
+    if (resizeLockAspectCheck_) {
+        resizeLockAspectCheck_->setEnabled(true);
     }
 }
 
@@ -1955,6 +2114,7 @@ void MainWindow::clearPreviewState() {
     originalMeta_ = ImageMeta();
     hasOriginalBackup_ = false;
     previewAdjusted_ = false;
+    resizeAspectSyncing_ = false;
 
     if (mipGroup_) {
         mipGroup_->setVisible(false);

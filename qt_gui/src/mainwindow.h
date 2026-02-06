@@ -78,6 +78,10 @@ private slots:
     void onCenterPow2();
     void onRestorePow2();
     void onResizeAndSave();
+    void onResizeWidthChanged(int value);
+    void onResizeHeightChanged(int value);
+    void onResizeWidthSliderChanged(int value);
+    void onResizeHeightSliderChanged(int value);
     void onAlphaToggled(bool enabled);
 
 private:
@@ -103,6 +107,7 @@ private:
     void setPreviewImage(const QImage& image, bool adjusted);
     QImage applyPreviewAlpha(const QImage& image) const;
     void updateResizeControls();
+    QImage currentResizeSourceImage() const;
 
     FileListWidget* fileList_ = nullptr;
     ImageView* imageView_ = nullptr;
@@ -133,8 +138,11 @@ private:
     QToolButton* pow2AlignButton_ = nullptr;
     QToolButton* pow2CenterButton_ = nullptr;
     QToolButton* pow2RestoreButton_ = nullptr;
+    QSlider* resizeWidthSlider_ = nullptr;
+    QSlider* resizeHeightSlider_ = nullptr;
     QSpinBox* resizeWidthSpin_ = nullptr;
     QSpinBox* resizeHeightSpin_ = nullptr;
+    QCheckBox* resizeLockAspectCheck_ = nullptr;
     QPushButton* resizeSaveButton_ = nullptr;
     QToolButton* backgroundButton_ = nullptr;
     QToolButton* alphaToggle_ = nullptr;
@@ -151,6 +159,7 @@ private:
     bool hasOriginalBackup_ = false;
     bool previewAdjusted_ = false;
     bool previewUseAlpha_ = false;
+    bool resizeAspectSyncing_ = false;
     bool currentIsBlp_ = false;
     int currentMipIndex_ = 0;
     BlpApi blpApi_;
