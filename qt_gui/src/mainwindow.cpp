@@ -268,11 +268,18 @@ QVector<BlpMipEntry> readBlpMipEntries(const QByteArray& bytes) {
     }
 
     const char* data = bytes.constData();
-    if (memcmp(data, "BLP1", 4) != 0 && memcmp(data, "BLP2", 4) != 0) {
+    const bool isBlp1 = memcmp(data, "BLP1", 4) == 0;
+    const bool isBlp2 = memcmp(data, "BLP2", 4) == 0;
+    if (!isBlp1 && !isBlp2) {
         return entries;
     }
 
-    const int offsetsOffset = 20;
+    const int headerSize = isBlp1 ? 156 : 148;
+    if (bytes.size() < headerSize) {
+        return entries;
+    }
+
+    const int offsetsOffset = isBlp1 ? 28 : 20;
     const int sizesOffset = offsetsOffset + 16 * 4;
 
     for (int i = 0; i < 16; ++i) {

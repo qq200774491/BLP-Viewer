@@ -47,52 +47,66 @@ pub extern "C" fn blp_load_from_buffer(
 
     let buffer = unsafe { slice::from_raw_parts(data, data_len as usize) };
 
-    match ImageBlp::from_buf(buffer) {
-        Ok(mut image) => {
-            // Decode only base mip by default
-            // MAX_MIPS = 16 in the blp crate. We request only the top level.
-            let mut mip_visible = [false; 16];
-            mip_visible[0] = true;
-            match image.decode(buffer, &mip_visible) {
-                Ok(_) => {
-                    // Get the first (main) mip
-                    if let Some(mip) = image.mipmaps.get(0) {
-                        if let Some(rgba_image) = &mip.image {
-                            let rgba_data = rgba_image.as_raw();
-                            let data_len = rgba_data.len();
+    let probe = match ImageBlp::from_buf(buffer) {
+        Ok(image) => image,
+        Err(_) => return BlpResult::ParseError,
+    };
 
-                            // Allocate memory for image data
-                            let data_ptr = unsafe {
-                                libc::malloc(data_len) as *mut u8
-                            };
-
-                            if data_ptr.is_null() {
-                                return BlpResult::MemoryError;
-                            }
-
-                            // Copy data
-                            unsafe {
-                                ptr::copy_nonoverlapping(rgba_data.as_ptr(), data_ptr, data_len);
-
-                                (*out_image).width = image.width;
-                                (*out_image).height = image.height;
-                                (*out_image).data = data_ptr;
-                                (*out_image).data_len = data_len as c_uint;
-                            }
-
-                            BlpResult::Success
-                        } else {
-                            BlpResult::ParseError
-                        }
-                    } else {
-                        BlpResult::ParseError
-                    }
-                },
-                Err(_) => BlpResult::ParseError,
-            }
-        },
-        Err(_) => BlpResult::ParseError,
+    let mut candidates = Vec::new();
+    for (idx, mip) in probe.mipmaps.iter().enumerate() {
+        if mip.length > 0 && mip.width > 0 && mip.height > 0 {
+            candidates.push(idx);
+        }
     }
+    if candidates.is_empty() {
+        candidates.push(0);
+    }
+
+    for idx in candidates {
+        let mut image = match ImageBlp::from_buf(buffer) {
+            Ok(img) => img,
+            Err(_) => return BlpResult::ParseError,
+        };
+
+        let mut mip_visible = [false; 16];
+        if idx < mip_visible.len() {
+            mip_visible[idx] = true;
+        }
+
+        if image.decode(buffer, &mip_visible).is_err() {
+            continue;
+        }
+
+        let mut chosen = None;
+        for mip in &image.mipmaps {
+            if let Some(rgba_image) = &mip.image {
+                chosen = Some((mip, rgba_image));
+                break;
+            }
+        }
+
+        if let Some((mip, rgba_image)) = chosen {
+            let rgba_data = rgba_image.as_raw();
+            let data_len = rgba_data.len();
+
+            let data_ptr = unsafe { libc::malloc(data_len) as *mut u8 };
+            if data_ptr.is_null() {
+                return BlpResult::MemoryError;
+            }
+
+            unsafe {
+                ptr::copy_nonoverlapping(rgba_data.as_ptr(), data_ptr, data_len);
+                (*out_image).width = mip.width;
+                (*out_image).height = mip.height;
+                (*out_image).data = data_ptr;
+                (*out_image).data_len = data_len as c_uint;
+            }
+
+            return BlpResult::Success;
+        }
+    }
+
+    BlpResult::ParseError
 }
 
 /// Loads BLP file from filesystem

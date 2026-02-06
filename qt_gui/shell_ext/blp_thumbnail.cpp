@@ -9,6 +9,7 @@
 #include <objidl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -141,16 +142,132 @@ bool isBlpBytes(const std::vector<uint8_t>& bytes) {
     return std::memcmp(bytes.data(), "BLP1", 4) == 0 || std::memcmp(bytes.data(), "BLP2", 4) == 0;
 }
 
-std::vector<uint8_t> rgbaToBgra(const uint8_t* rgba, size_t pixelCount) {
+inline uint8_t premultiply(uint8_t channel, uint8_t alpha) {
+    return static_cast<uint8_t>((static_cast<unsigned int>(channel) * alpha + 127) / 255);
+}
+
+inline uint8_t clampToByte(float value) {
+    if (value <= 0.0f) {
+        return 0;
+    }
+    if (value >= 255.0f) {
+        return 255;
+    }
+    return static_cast<uint8_t>(value + 0.5f);
+}
+
+std::vector<uint8_t> rgbaToBgraPremultiplied(const uint8_t* rgba, size_t pixelCount) {
     std::vector<uint8_t> bgra(pixelCount * 4);
     for (size_t i = 0; i < pixelCount; ++i) {
         const size_t idx = i * 4;
-        bgra[idx + 0] = rgba[idx + 2];
-        bgra[idx + 1] = rgba[idx + 1];
-        bgra[idx + 2] = rgba[idx + 0];
-        bgra[idx + 3] = rgba[idx + 3];
+        const uint8_t a = rgba[idx + 3];
+        bgra[idx + 0] = premultiply(rgba[idx + 2], a);
+        bgra[idx + 1] = premultiply(rgba[idx + 1], a);
+        bgra[idx + 2] = premultiply(rgba[idx + 0], a);
+        bgra[idx + 3] = a;
     }
     return bgra;
+}
+
+std::vector<uint8_t> scaleRgbaToBgraPremultiplied(const uint8_t* rgba,
+                                                  int srcW,
+                                                  int srcH,
+                                                  int dstW,
+                                                  int dstH) {
+    if (!rgba || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
+        return {};
+    }
+
+    const size_t pixelCount = static_cast<size_t>(dstW) * static_cast<size_t>(dstH);
+    if (pixelCount > (std::numeric_limits<size_t>::max() / 4)) {
+        return {};
+    }
+
+    if (srcW == dstW && srcH == dstH) {
+        return rgbaToBgraPremultiplied(rgba, static_cast<size_t>(srcW) * static_cast<size_t>(srcH));
+    }
+
+    std::vector<uint8_t> out(pixelCount * 4);
+    const float scaleX = static_cast<float>(srcW) / static_cast<float>(dstW);
+    const float scaleY = static_cast<float>(srcH) / static_cast<float>(dstH);
+
+    for (int y = 0; y < dstH; ++y) {
+        float srcY = (static_cast<float>(y) + 0.5f) * scaleY - 0.5f;
+        int y0 = static_cast<int>(std::floor(srcY));
+        int y1 = y0 + 1;
+        float wy = srcY - static_cast<float>(y0);
+
+        if (y0 < 0) {
+            y0 = 0;
+            y1 = 0;
+            wy = 0.0f;
+        } else if (y1 >= srcH) {
+            y1 = srcH - 1;
+            y0 = y1;
+            wy = 0.0f;
+        }
+
+        for (int x = 0; x < dstW; ++x) {
+            float srcX = (static_cast<float>(x) + 0.5f) * scaleX - 0.5f;
+            int x0 = static_cast<int>(std::floor(srcX));
+            int x1 = x0 + 1;
+            float wx = srcX - static_cast<float>(x0);
+
+            if (x0 < 0) {
+                x0 = 0;
+                x1 = 0;
+                wx = 0.0f;
+            } else if (x1 >= srcW) {
+                x1 = srcW - 1;
+                x0 = x1;
+                wx = 0.0f;
+            }
+
+            const float w00 = (1.0f - wx) * (1.0f - wy);
+            const float w10 = wx * (1.0f - wy);
+            const float w01 = (1.0f - wx) * wy;
+            const float w11 = wx * wy;
+
+            const uint8_t* p00 = rgba + (static_cast<size_t>(y0) * srcW + x0) * 4;
+            const uint8_t* p10 = rgba + (static_cast<size_t>(y0) * srcW + x1) * 4;
+            const uint8_t* p01 = rgba + (static_cast<size_t>(y1) * srcW + x0) * 4;
+            const uint8_t* p11 = rgba + (static_cast<size_t>(y1) * srcW + x1) * 4;
+
+            const float a00 = static_cast<float>(p00[3]);
+            const float a10 = static_cast<float>(p10[3]);
+            const float a01 = static_cast<float>(p01[3]);
+            const float a11 = static_cast<float>(p11[3]);
+
+            const float r00 = static_cast<float>(p00[0]) * (a00 / 255.0f);
+            const float g00 = static_cast<float>(p00[1]) * (a00 / 255.0f);
+            const float b00 = static_cast<float>(p00[2]) * (a00 / 255.0f);
+
+            const float r10 = static_cast<float>(p10[0]) * (a10 / 255.0f);
+            const float g10 = static_cast<float>(p10[1]) * (a10 / 255.0f);
+            const float b10 = static_cast<float>(p10[2]) * (a10 / 255.0f);
+
+            const float r01 = static_cast<float>(p01[0]) * (a01 / 255.0f);
+            const float g01 = static_cast<float>(p01[1]) * (a01 / 255.0f);
+            const float b01 = static_cast<float>(p01[2]) * (a01 / 255.0f);
+
+            const float r11 = static_cast<float>(p11[0]) * (a11 / 255.0f);
+            const float g11 = static_cast<float>(p11[1]) * (a11 / 255.0f);
+            const float b11 = static_cast<float>(p11[2]) * (a11 / 255.0f);
+
+            const float a = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11;
+            const float r = w00 * r00 + w10 * r10 + w01 * r01 + w11 * r11;
+            const float g = w00 * g00 + w10 * g10 + w01 * g01 + w11 * g11;
+            const float b = w00 * b00 + w10 * b10 + w01 * b01 + w11 * b11;
+
+            const size_t outIdx = (static_cast<size_t>(y) * dstW + x) * 4;
+            out[outIdx + 0] = clampToByte(b);
+            out[outIdx + 1] = clampToByte(g);
+            out[outIdx + 2] = clampToByte(r);
+            out[outIdx + 3] = clampToByte(a);
+        }
+    }
+
+    return out;
 }
 
 HBITMAP createThumbnailBitmapFromRgba(const uint8_t* rgba, int width, int height, UINT cx) {
@@ -177,37 +294,13 @@ HBITMAP createThumbnailBitmapFromRgba(const uint8_t* rgba, int width, int height
         return nullptr;
     }
 
-    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-    const std::vector<uint8_t> bgra = rgbaToBgra(rgba, pixelCount);
+    const std::vector<uint8_t> bgra = scaleRgbaToBgraPremultiplied(rgba, width, height, destW, destH);
+    if (bgra.empty()) {
+        DeleteObject(hbmp);
+        return nullptr;
+    }
 
-    BITMAPINFO srcInfo = {};
-    srcInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    srcInfo.bmiHeader.biWidth = width;
-    srcInfo.bmiHeader.biHeight = -height;
-    srcInfo.bmiHeader.biPlanes = 1;
-    srcInfo.bmiHeader.biBitCount = 32;
-    srcInfo.bmiHeader.biCompression = BI_RGB;
-
-    HDC hdc = CreateCompatibleDC(nullptr);
-    HGDIOBJ old = SelectObject(hdc, hbmp);
-    SetStretchBltMode(hdc, HALFTONE);
-    POINT oldOrg = {};
-    SetBrushOrgEx(hdc, 0, 0, &oldOrg);
-    StretchDIBits(hdc,
-                  0,
-                  0,
-                  destW,
-                  destH,
-                  0,
-                  0,
-                  width,
-                  height,
-                  bgra.data(),
-                  &srcInfo,
-                  DIB_RGB_COLORS,
-                  SRCCOPY);
-    SelectObject(hdc, old);
-    DeleteDC(hdc);
+    std::memcpy(destBits, bgra.data(), bgra.size());
 
     return hbmp;
 }
