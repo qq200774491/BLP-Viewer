@@ -16,7 +16,7 @@
 namespace {
 
 std::string extensionFromPath(const std::string& path) {
-    std::string ext = std::filesystem::path(path).extension().string();
+    std::string ext = fsPathFromUtf8(path).extension().string();
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     std::string result = ext;
     std::transform(result.begin(), result.end(), result.begin(),
@@ -120,16 +120,25 @@ bool loadImageFile(const std::string& path,
         return false;
     }
 
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    const std::filesystem::path fsPath = fsPathFromUtf8(path);
+    std::ifstream file(fsPath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         if (outError) *outError = "打开文件失败";
         return false;
     }
 
-    const auto fileSize = file.tellg();
+    const std::streamsize fileSize = file.tellg();
+    if (fileSize <= 0) {
+        if (outError) *outError = "文件为空";
+        return false;
+    }
     file.seekg(0, std::ios::beg);
     std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
     file.read(reinterpret_cast<char*>(bytes.data()), fileSize);
+    if (!file.good() && !file.eof()) {
+        if (outError) *outError = "读取文件失败";
+        return false;
+    }
     file.close();
 
     if (bytes.empty()) {
@@ -138,8 +147,11 @@ bool loadImageFile(const std::string& path,
     }
 
     const std::string ext = normalizeFormat(extensionFromPath(path));
+    const bool looksLikeBlp = bytes.size() >= 4 &&
+                              (std::memcmp(bytes.data(), "BLP1", 4) == 0 ||
+                               std::memcmp(bytes.data(), "BLP2", 4) == 0);
 
-    if (ext == "blp") {
+    if (ext == "blp" || looksLikeBlp) {
         if (!blpApi || !blpApi->ensureLoaded(outError)) {
             if (outError && outError->empty()) *outError = "BLP 库未加载";
             return false;
@@ -178,8 +190,8 @@ bool loadImageFile(const std::string& path,
     if (outMeta) {
         outMeta->width = outImage->width;
         outMeta->height = outImage->height;
-        outMeta->format = ext;
-        outMeta->fileSize = static_cast<uint64_t>(std::filesystem::file_size(path));
+        outMeta->format = looksLikeBlp ? "blp" : ext;
+        outMeta->fileSize = static_cast<uint64_t>(std::filesystem::file_size(fsPath));
     }
 
     return true;
@@ -194,7 +206,11 @@ bool writeImageFile(const std::string& outputPath,
                     BlpApi* blpApi) {
     const std::string fmt = normalizeFormat(format);
     namespace fs = std::filesystem;
-    fs::create_directories(fs::path(outputPath).parent_path());
+    const fs::path outFsPath = fsPathFromUtf8(outputPath);
+    const fs::path outParent = outFsPath.parent_path();
+    if (!outParent.empty()) {
+        fs::create_directories(outParent);
+    }
 
     if (fmt == "blp") {
         if (!blpApi || !blpApi->ensureLoaded(outError)) {
@@ -216,7 +232,7 @@ bool writeImageFile(const std::string& outputPath,
         return false;
     }
 
-    std::ofstream file(outputPath, std::ios::binary | std::ios::trunc);
+    std::ofstream file(outFsPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
         if (outError) *outError = "打开输出文件失败";
         return false;

@@ -5,6 +5,22 @@
 #include <cstdio>
 #include <filesystem>
 
+std::filesystem::path fsPathFromUtf8(const std::string& utf8Path) {
+    try {
+        return std::filesystem::u8path(utf8Path);
+    } catch (...) {
+        return std::filesystem::path(utf8Path);
+    }
+}
+
+std::string fsPathToUtf8(const std::filesystem::path& path) {
+    try {
+        return path.u8string();
+    } catch (...) {
+        return path.string();
+    }
+}
+
 bool isPowerOfTwo(int value) {
     return value > 0 && ((value & (value - 1)) == 0);
 }
@@ -76,8 +92,8 @@ std::string normalizeInputPath(const std::string& raw) {
 
     namespace fs = std::filesystem;
     try {
-        fs::path p(cleaned);
-        return fs::weakly_canonical(p).string();
+        fs::path p = fsPathFromUtf8(cleaned);
+        return fsPathToUtf8(fs::weakly_canonical(p));
     } catch (...) {
         return cleaned;
     }
@@ -119,7 +135,7 @@ std::vector<std::string> supportedExtensions() {
 
 bool isSupportedFile(const std::string& path) {
     namespace fs = std::filesystem;
-    std::string ext = fs::path(path).extension().string();
+    std::string ext = fsPathFromUtf8(path).extension().string();
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     std::string normalized = normalizeFormat(ext);
     for (const auto& supported : supportedExtensions()) {

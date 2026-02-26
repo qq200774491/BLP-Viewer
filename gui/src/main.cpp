@@ -50,14 +50,15 @@ static void handleDropFiles(HDROP hDrop) {
     for (const auto& path : paths) {
         namespace fs = std::filesystem;
         try {
-            if (!fs::exists(path)) continue;
-            if (fs::is_directory(path)) {
+            fs::path fsPath = fsPathFromUtf8(path);
+            if (!fs::exists(fsPath)) continue;
+            if (fs::is_directory(fsPath)) {
                 // Will be handled by addFiles in left panel
                 // For now just add supported files
                 continue;
             }
             if (!isSupportedFile(path)) continue;
-            std::string fullPath = fs::absolute(path).string();
+            std::string fullPath = fsPathToUtf8(fs::absolute(fsPath));
             if (g_state.fileSet.count(fullPath)) continue;
             g_state.fileList.push_back(fullPath);
             g_state.fileSet.insert(fullPath);
@@ -243,9 +244,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         for (const auto& path : paths) {
             namespace fs = std::filesystem;
             try {
-                if (!fs::exists(path)) continue;
+                fs::path fsPath = fsPathFromUtf8(path);
+                if (!fs::exists(fsPath)) continue;
                 if (!isSupportedFile(path)) continue;
-                std::string fullPath = fs::absolute(path).string();
+                std::string fullPath = fsPathToUtf8(fs::absolute(fsPath));
                 if (g_state.fileSet.count(fullPath)) continue;
                 g_state.fileList.push_back(fullPath);
                 g_state.fileSet.insert(fullPath);

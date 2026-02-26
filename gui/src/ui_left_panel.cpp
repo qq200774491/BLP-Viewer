@@ -40,6 +40,7 @@ void addFolderFiles(AppState& state, const std::string& folder, bool recursive) 
     if (folder.empty()) return;
 
     namespace fs = std::filesystem;
+    const fs::path folderPath = fsPathFromUtf8(folder);
     auto exts = supportedExtensions();
 
     std::vector<std::string> paths;
@@ -55,9 +56,9 @@ void addFolderFiles(AppState& state, const std::string& folder, bool recursive) 
             if (normExt == e) { supported = true; break; }
         }
         if (!supported) return;
-        std::string fullPath = entry.path().string();
+        std::string fullPath = fsPathToUtf8(entry.path());
         paths.push_back(fullPath);
-        std::string relPath = fs::relative(entry.path(), folder).string();
+        std::string relPath = fsPathToUtf8(fs::relative(entry.path(), folderPath));
         if (!relPath.empty()) {
             relMap[fullPath] = relPath;
         }
@@ -65,10 +66,10 @@ void addFolderFiles(AppState& state, const std::string& folder, bool recursive) 
 
     try {
         if (recursive) {
-            for (const auto& entry : fs::recursive_directory_iterator(folder))
+            for (const auto& entry : fs::recursive_directory_iterator(folderPath))
                 processEntry(entry);
         } else {
-            for (const auto& entry : fs::directory_iterator(folder))
+            for (const auto& entry : fs::directory_iterator(folderPath))
                 processEntry(entry);
         }
     } catch (...) {}
@@ -87,14 +88,15 @@ void addFiles(AppState& state, const std::vector<std::string>& paths) {
     for (const auto& path : paths) {
         namespace fs = std::filesystem;
         try {
-            if (!fs::exists(path)) continue;
-            if (fs::is_directory(path)) {
+            fs::path fsPath = fsPathFromUtf8(path);
+            if (!fs::exists(fsPath)) continue;
+            if (fs::is_directory(fsPath)) {
                 addFolderFiles(state, path, state.recursive);
                 continue;
             }
             if (!isSupportedFile(path)) continue;
 
-            std::string fullPath = fs::absolute(path).string();
+            std::string fullPath = fsPathToUtf8(fs::absolute(fsPath));
             if (state.fileSet.count(fullPath)) continue;
 
             state.fileList.push_back(fullPath);
@@ -119,30 +121,33 @@ std::string buildOutputPath(const AppState& state, const std::string& inputPath,
                             const std::string& format, bool overwrite) {
     namespace fs = std::filesystem;
     std::string outputDir = state.outputDirBuf;
+    fs::path outputDirPath = fsPathFromUtf8(outputDir);
     auto it = state.relativePathMap.find(inputPath);
     std::string baseName;
     std::string relativeDir;
     if (it != state.relativePathMap.end()) {
-        fs::path relPath(it->second);
-        baseName = relPath.stem().string();
-        relativeDir = relPath.parent_path().string();
+        fs::path relPath = fsPathFromUtf8(it->second);
+        baseName = fsPathToUtf8(relPath.stem());
+        relativeDir = fsPathToUtf8(relPath.parent_path());
         if (relativeDir == ".") relativeDir.clear();
     } else {
-        baseName = fs::path(inputPath).stem().string();
+        baseName = fsPathToUtf8(fsPathFromUtf8(inputPath).stem());
     }
     std::string ext = normalizeFormat(format);
-    std::string targetDir = relativeDir.empty()
-                                ? outputDir
-                                : (fs::path(outputDir) / relativeDir).string();
+    fs::path targetDirPath = relativeDir.empty()
+                                 ? outputDirPath
+                                 : (outputDirPath / fsPathFromUtf8(relativeDir));
 
-    std::string candidate = (fs::path(targetDir) / (baseName + "." + ext)).string();
-    if (overwrite || !fs::exists(candidate)) return candidate;
+    fs::path candidatePath = targetDirPath / fsPathFromUtf8(baseName + "." + ext);
+    std::string candidate = fsPathToUtf8(candidatePath);
+    if (overwrite || !fs::exists(candidatePath)) return candidate;
 
     int index = 1;
-    while (fs::exists(candidate)) {
+    while (fs::exists(candidatePath)) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "_%d.", index);
-        candidate = (fs::path(targetDir) / (baseName + buf + ext)).string();
+        candidatePath = targetDirPath / fsPathFromUtf8(baseName + buf + ext);
+        candidate = fsPathToUtf8(candidatePath);
         ++index;
     }
     return candidate;
@@ -164,8 +169,7 @@ void doConvertAll(AppState& state) {
     std::string outputDir = state.outputDirBuf;
     if (outputDir.empty()) {
         if (state.fileList.size() == 1) {
-            namespace fs = std::filesystem;
-            outputDir = fs::path(state.fileList[0]).parent_path().string();
+            outputDir = fsPathToUtf8(fsPathFromUtf8(state.fileList[0]).parent_path());
             std::strncpy(state.outputDirBuf, outputDir.c_str(), sizeof(state.outputDirBuf) - 1);
             logMessage(state, "未设置输出目录，已使用源文件目录");
         }
@@ -238,8 +242,7 @@ void renderLeftPanel(AppState& state) {
     float listH = ImGui::GetContentRegionAvail().y * 0.28f;
     ImGui::BeginChild("FileList", ImVec2(-1, listH), ImGuiChildFlags_Borders);
     for (int i = 0; i < static_cast<int>(state.fileList.size()); ++i) {
-        namespace fs = std::filesystem;
-        std::string displayName = fs::path(state.fileList[i]).filename().string();
+        std::string displayName = fsPathToUtf8(fsPathFromUtf8(state.fileList[i]).filename());
         bool isSelected = (i == state.selectedFileIndex);
         if (ImGui::Selectable(displayName.c_str(), isSelected)) {
             state.selectedFileIndex = i;
@@ -313,7 +316,8 @@ void renderLeftPanel(AppState& state) {
         std::string dir = state.inputDirBuf;
         if (!dir.empty()) {
             namespace fs = std::filesystem;
-            if (fs::exists(dir) && fs::is_directory(dir)) {
+            fs::path dirPath = fsPathFromUtf8(dir);
+            if (fs::exists(dirPath) && fs::is_directory(dirPath)) {
                 addFolderFiles(state, dir, state.recursive);
             } else {
                 logMessage(state, "输入目录不存在");

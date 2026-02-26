@@ -42,7 +42,7 @@ std::vector<BlpMipEntry> readBlpMipEntries(const std::vector<uint8_t>& bytes) {
 }
 
 bool writeFileBytes(const std::string& path, const std::vector<uint8_t>& bytes, std::string* outError) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    std::ofstream file(fsPathFromUtf8(path), std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
         if (outError) *outError = "写入文件失败";
         return false;
@@ -76,10 +76,13 @@ void updatePreview(AppState& state, const std::string& path) {
     state.selectedMipIndex = 0;
 
     namespace fs = std::filesystem;
-    std::string ext = normalizeFormat(fs::path(path).extension().string().substr(1));
+    const fs::path fsInputPath = fsPathFromUtf8(path);
+    std::string ext = fsInputPath.extension().string();
+    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+    ext = normalizeFormat(ext);
 
     // Read file bytes
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(fsInputPath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         logMsg(state, "打开失败：" + path);
         state.imageViewer.clearImage();
@@ -189,7 +192,7 @@ bool saveAlignedToSource(AppState& state, const std::vector<uint8_t>& rgba,
     }
 
     namespace fs = std::filesystem;
-    std::string ext = fs::path(state.currentPreviewPath).extension().string();
+    std::string ext = fsPathFromUtf8(state.currentPreviewPath).extension().string();
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     std::string format = normalizeFormat(ext);
 
@@ -208,14 +211,14 @@ bool saveAlignedToSource(AppState& state, const std::vector<uint8_t>& rgba,
     state.currentMeta.height = h;
     state.currentMeta.format = format;
     try {
-        state.currentMeta.fileSize = static_cast<uint64_t>(fs::file_size(state.currentPreviewPath));
+        state.currentMeta.fileSize = static_cast<uint64_t>(fs::file_size(fsPathFromUtf8(state.currentPreviewPath)));
     } catch (...) {}
 
     state.currentIsBlp = (format == "blp");
     state.currentMipIndex = 0;
 
     if (state.currentIsBlp) {
-        std::ifstream f(state.currentPreviewPath, std::ios::binary | std::ios::ate);
+        std::ifstream f(fsPathFromUtf8(state.currentPreviewPath), std::ios::binary | std::ios::ate);
         if (f.is_open()) {
             auto sz = f.tellg();
             f.seekg(0);
@@ -508,8 +511,8 @@ void renderRightPanel(AppState& state) {
                         }
 
                         // Cleanup temp
-                        try { std::filesystem::remove(pngPath); } catch (...) {}
-                        try { std::filesystem::remove(narrowPath); } catch (...) {}
+                        try { std::filesystem::remove(fsPathFromUtf8(pngPath)); } catch (...) {}
+                        try { std::filesystem::remove(fsPathFromUtf8(narrowPath)); } catch (...) {}
                     }
                 }
             }

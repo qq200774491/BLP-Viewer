@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "utils.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -16,15 +17,15 @@ std::string AppSettings::settingsPath() {
         char buf[MAX_PATH * 3] = {};
         WideCharToMultiByte(CP_UTF8, 0, appData, -1, buf, sizeof(buf), nullptr, nullptr);
         CoTaskMemFree(appData);
-        std::filesystem::path dir = std::filesystem::path(buf) / "blp_viewer";
+        std::filesystem::path dir = fsPathFromUtf8(buf) / "blp_viewer";
         std::filesystem::create_directories(dir);
-        return (dir / "settings.ini").string();
+        return fsPathToUtf8(dir / "settings.ini");
     }
     return "settings.ini";
 }
 
 void AppSettings::load() {
-    std::ifstream file(settingsPath());
+    std::ifstream file(fsPathFromUtf8(settingsPath()));
     if (!file.is_open()) return;
 
     std::string line;
@@ -58,9 +59,10 @@ void AppSettings::load() {
 
 void AppSettings::save() const {
     std::string path = settingsPath();
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    std::filesystem::path fsPath = fsPathFromUtf8(path);
+    std::filesystem::create_directories(fsPath.parent_path());
 
-    std::ofstream file(path, std::ios::trunc);
+    std::ofstream file(fsPath, std::ios::trunc);
     if (!file.is_open()) return;
 
     file << "[window]\n";

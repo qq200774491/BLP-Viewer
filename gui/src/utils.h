@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -9,6 +10,9 @@ int nearestPowerOfTwo(int value);
 int nextPowerOfTwo(int value);
 int autoMipCount(int width, int height);
 int snapResizeValue(int value);
+
+std::filesystem::path fsPathFromUtf8(const std::string& utf8Path);
+std::string fsPathToUtf8(const std::filesystem::path& path);
 
 std::string normalizeInputPath(const std::string& raw);
 std::string formatFileSize(uint64_t bytes);
