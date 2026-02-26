@@ -24,6 +24,13 @@ struct BlpMipEntry {
     uint32_t size = 0;
 };
 
+struct ConvertItemResult {
+    std::string inputPath;
+    std::string outputPath;
+    bool success = false;
+    std::string error;
+};
+
 struct AppState {
     // Window handle
     HWND hwnd = nullptr;
@@ -54,6 +61,13 @@ struct AppState {
     std::atomic<float> convertProgress{0.0f};
     std::atomic<bool> converting{false};
     std::vector<std::string> logMessages;
+    std::vector<ConvertItemResult> lastConvertResults;
+    int lastConvertTotal = 0;
+    int lastConvertSuccess = 0;
+    int lastConvertFailed = 0;
+    bool taskDrawerVisible = true;
+    float taskDrawerHeight = 190.0f;
+    bool showAboutPopup = false;
 
     // Preview state
     ImageViewer imageViewer;
@@ -101,5 +115,6 @@ struct AppState {
 };
 
 void renderMainUI(AppState& state);
-void renderToolbar(AppState& state);
+void renderMenuBar(AppState& state);
+void renderTaskDrawer(AppState& state);
 void renderStatusBar(AppState& state);

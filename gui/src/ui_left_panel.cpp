@@ -1,10 +1,12 @@
 #include "ui_left_panel.h"
 #include "ui_main.h"
 #include "file_dialogs.h"
+#include "style.h"
 #include "utils.h"
 #include "win_integration.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -20,6 +22,12 @@ std::string wideToUtf8(const std::wstring& wide) {
     std::string result(sz - 1, '\0');
     WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, result.data(), sz, nullptr, nullptr);
     return result;
+}
+
+std::string toLowerAscii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
 }
 
 void logMessage(AppState& state, const std::string& msg) {
@@ -153,6 +161,98 @@ std::string buildOutputPath(const AppState& state, const std::string& inputPath,
     return candidate;
 }
 
+bool ensureOutputDir(AppState& state, const std::vector<std::string>& inputPaths) {
+    std::string outputDir = state.outputDirBuf;
+    if (!outputDir.empty()) return true;
+
+    if (inputPaths.size() == 1) {
+        outputDir = fsPathToUtf8(fsPathFromUtf8(inputPaths[0]).parent_path());
+        std::strncpy(state.outputDirBuf, outputDir.c_str(), sizeof(state.outputDirBuf) - 1);
+        logMessage(state, "未设置输出目录，已使用源文件目录");
+        return !outputDir.empty();
+    }
+
+    logMessage(state, "请先设置输出目录");
+    return false;
+}
+
+void runConvertForPathsInternal(AppState& state, const std::vector<std::string>& inputPaths) {
+    if (state.converting.load()) {
+        logMessage(state, "已有转换任务正在执行");
+        return;
+    }
+    if (inputPaths.empty()) {
+        logMessage(state, "没有可转换的文件");
+        return;
+    }
+    if (!ensureOutputDir(state, inputPaths)) return;
+
+    const std::string format = normalizedFormatStr(state.outputFormat);
+    const bool formatIsBlp = (format == "blp");
+
+    const int total = static_cast<int>(inputPaths.size());
+    int successCount = 0;
+    int failedCount = 0;
+
+    state.lastConvertResults.clear();
+    state.lastConvertResults.reserve(inputPaths.size());
+    state.lastConvertTotal = total;
+    state.lastConvertSuccess = 0;
+    state.lastConvertFailed = 0;
+
+    state.converting = true;
+    state.convertProgress = 0.0f;
+
+    for (int i = 0; i < total; ++i) {
+        const std::string& inputPath = inputPaths[i];
+        ConvertItemResult item;
+        item.inputPath = inputPath;
+
+        RgbaImage image;
+        ImageMeta meta;
+        std::string error;
+        if (!loadImageFile(inputPath, &image, &meta, &error, &state.blpApi)) {
+            item.success = false;
+            item.error = error;
+            char msg[512];
+            std::snprintf(msg, sizeof(msg), "读取失败：%s（%s）", inputPath.c_str(), error.c_str());
+            logMessage(state, msg);
+            ++failedCount;
+            state.lastConvertResults.push_back(std::move(item));
+            state.convertProgress = static_cast<float>(i + 1) / total;
+            continue;
+        }
+
+        std::string outPath = buildOutputPath(state, inputPath, format, state.overwrite);
+        item.outputPath = outPath;
+        const int mipCount = formatIsBlp ? autoMipCount(image.width, image.height) : 1;
+        if (!writeImageFile(outPath, format, image, state.quality, mipCount, &error, &state.blpApi)) {
+            item.success = false;
+            item.error = error;
+            char msg[512];
+            std::snprintf(msg, sizeof(msg), "写入失败：%s（%s）", outPath.c_str(), error.c_str());
+            logMessage(state, msg);
+            ++failedCount;
+            state.lastConvertResults.push_back(std::move(item));
+            state.convertProgress = static_cast<float>(i + 1) / total;
+            continue;
+        }
+
+        item.success = true;
+        ++successCount;
+        state.lastConvertResults.push_back(std::move(item));
+        state.convertProgress = static_cast<float>(i + 1) / total;
+    }
+
+    state.lastConvertSuccess = successCount;
+    state.lastConvertFailed = failedCount;
+    char msg[160];
+    std::snprintf(msg, sizeof(msg), "已转换 %d / %d 个文件（失败 %d）",
+                  successCount, total, failedCount);
+    logMessage(state, msg);
+    state.converting = false;
+}
+
 void doConvertAll(AppState& state) {
     if (state.fileList.empty()) {
         std::string inputDir = state.inputDirBuf;
@@ -161,250 +261,202 @@ void doConvertAll(AppState& state) {
         }
     }
 
-    if (state.fileList.empty()) {
-        logMessage(state, "没有可转换的文件");
-        return;
-    }
-
-    std::string outputDir = state.outputDirBuf;
-    if (outputDir.empty()) {
-        if (state.fileList.size() == 1) {
-            outputDir = fsPathToUtf8(fsPathFromUtf8(state.fileList[0]).parent_path());
-            std::strncpy(state.outputDirBuf, outputDir.c_str(), sizeof(state.outputDirBuf) - 1);
-            logMessage(state, "未设置输出目录，已使用源文件目录");
-        }
-        if (outputDir.empty()) {
-            logMessage(state, "请先设置输出目录");
-            return;
-        }
-    }
-
-    const std::string format = normalizedFormatStr(state.outputFormat);
-    const bool formatIsBlp = (format == "blp");
-
-    int total = static_cast<int>(state.fileList.size());
-    int successCount = 0;
-
-    state.converting = true;
-    state.convertProgress = 0.0f;
-
-    for (int i = 0; i < total; ++i) {
-        const std::string& inputPath = state.fileList[i];
-
-        RgbaImage image;
-        ImageMeta meta;
-        std::string error;
-        if (!loadImageFile(inputPath, &image, &meta, &error, &state.blpApi)) {
-            char msg[512];
-            std::snprintf(msg, sizeof(msg), "读取失败：%s（%s）",
-                          inputPath.c_str(), error.c_str());
-            state.logMessages.push_back(msg);
-            state.convertProgress = static_cast<float>(i + 1) / total;
-            continue;
-        }
-
-        std::string outPath = buildOutputPath(state, inputPath, format, state.overwrite);
-        int mipCount = formatIsBlp ? autoMipCount(image.width, image.height) : 1;
-        if (!writeImageFile(outPath, format, image, state.quality, mipCount, &error, &state.blpApi)) {
-            char msg[512];
-            std::snprintf(msg, sizeof(msg), "写入失败：%s（%s）",
-                          outPath.c_str(), error.c_str());
-            state.logMessages.push_back(msg);
-            state.convertProgress = static_cast<float>(i + 1) / total;
-            continue;
-        }
-
-        ++successCount;
-        state.convertProgress = static_cast<float>(i + 1) / total;
-    }
-
-    char msg[128];
-    std::snprintf(msg, sizeof(msg), "已转换 %d / %d 个文件",
-                  successCount, total);
-    state.logMessages.push_back(msg);
-    state.converting = false;
+    runConvertForPathsInternal(state, state.fileList);
 }
 
 } // namespace
 
 void renderLeftPanel(AppState& state) {
-    // File group
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1, 1, 1, 1));
-
-    ImGui::TextUnformatted("待处理文件");
+    ImGui::TextUnformatted("资源中心");
     ImGui::Separator();
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.357f, 0.392f, 0.447f, 1.0f));
-    ImGui::TextWrapped("拖拽图片到任意位置，或使用按钮添加。列表中的文件会参与批量转换。");
-    ImGui::PopStyleColor();
+    if (ImGui::BeginTabBar("LeftWorkspaceTabs", ImGuiTabBarFlags_FittingPolicyResizeDown)) {
+        if (ImGui::BeginTabItem("资源列表")) {
+            static char searchBuf[128] = {};
 
-    // File list
-    float listH = ImGui::GetContentRegionAvail().y * 0.28f;
-    ImGui::BeginChild("FileList", ImVec2(-1, listH), ImGuiChildFlags_Borders);
-    for (int i = 0; i < static_cast<int>(state.fileList.size()); ++i) {
-        std::string displayName = fsPathToUtf8(fsPathFromUtf8(state.fileList[i]).filename());
-        bool isSelected = (i == state.selectedFileIndex);
-        if (ImGui::Selectable(displayName.c_str(), isSelected)) {
-            state.selectedFileIndex = i;
-        }
-    }
-    ImGui::EndChild();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.357f, 0.392f, 0.447f, 1.0f));
+            ImGui::TextWrapped("拖拽、按钮添加或从菜单栏导入。列表用于预览与批量转换。");
+            ImGui::PopStyleColor();
 
-    // File buttons
-    if (ImGui::Button("添加文件")) {
-        auto files = openFileDialog(state.hwnd,
-            L"*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.blp", true);
-        std::vector<std::string> paths;
-        for (const auto& f : files) paths.push_back(wideToUtf8(f));
-        addFiles(state, paths);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("添加文件夹")) {
-        auto folder = openFolderDialog(state.hwnd);
-        if (!folder.empty()) {
-            std::string folderUtf8 = wideToUtf8(folder);
-            std::strncpy(state.inputDirBuf, folderUtf8.c_str(), sizeof(state.inputDirBuf) - 1);
-            addFolderFiles(state, folderUtf8, state.recursive);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("移除")) {
-        if (state.selectedFileIndex >= 0 && state.selectedFileIndex < static_cast<int>(state.fileList.size())) {
-            std::string path = state.fileList[state.selectedFileIndex];
-            state.fileSet.erase(path);
-            state.relativePathMap.erase(path);
-            state.fileList.erase(state.fileList.begin() + state.selectedFileIndex);
-            if (state.selectedFileIndex >= static_cast<int>(state.fileList.size())) {
-                state.selectedFileIndex = static_cast<int>(state.fileList.size()) - 1;
+            ImGui::PushItemWidth(-1);
+            ImGui::InputTextWithHint("##FileSearch", "搜索文件名...", searchBuf, sizeof(searchBuf));
+            ImGui::PopItemWidth();
+
+            if (ImGui::Button("添加文件...")) {
+                auto files = openFileDialog(state.hwnd, L"*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.blp", true);
+                std::vector<std::string> paths;
+                for (const auto& f : files) paths.push_back(wideToUtf8(f));
+                addFiles(state, paths);
             }
+            ImGui::SameLine();
+            if (ImGui::Button("添加文件夹...")) {
+                auto folder = openFolderDialog(state.hwnd);
+                if (!folder.empty()) {
+                    std::string folderUtf8 = wideToUtf8(folder);
+                    std::strncpy(state.inputDirBuf, folderUtf8.c_str(), sizeof(state.inputDirBuf) - 1);
+                    addFolderFiles(state, folderUtf8, state.recursive);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("移除选中")) {
+                if (state.selectedFileIndex >= 0 && state.selectedFileIndex < static_cast<int>(state.fileList.size())) {
+                    std::string path = state.fileList[state.selectedFileIndex];
+                    state.fileSet.erase(path);
+                    state.relativePathMap.erase(path);
+                    state.fileList.erase(state.fileList.begin() + state.selectedFileIndex);
+                    if (state.selectedFileIndex >= static_cast<int>(state.fileList.size())) {
+                        state.selectedFileIndex = static_cast<int>(state.fileList.size()) - 1;
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("清空列表")) {
+                state.fileList.clear();
+                state.fileSet.clear();
+                state.relativePathMap.clear();
+                state.selectedFileIndex = -1;
+                state.imageViewer.clearImage();
+                state.currentPreviewPath.clear();
+                state.currentBlpBytes.clear();
+                state.previewOriginalRGBA.clear();
+                state.previewAdjustedRGBA.clear();
+                state.currentMeta = ImageMeta();
+            }
+
+            const std::string keyword = toLowerAscii(searchBuf);
+            float listH = ImGui::GetContentRegionAvail().y - 28.0f * state.dpiScale;
+            if (listH < 120.0f * state.dpiScale) listH = 120.0f * state.dpiScale;
+            ImGui::BeginChild("FileList", ImVec2(-1, listH), ImGuiChildFlags_Borders);
+            for (int i = 0; i < static_cast<int>(state.fileList.size()); ++i) {
+                const std::string displayName = fsPathToUtf8(fsPathFromUtf8(state.fileList[i]).filename());
+                if (!keyword.empty()) {
+                    const std::string nameLower = toLowerAscii(displayName);
+                    const std::string pathLower = toLowerAscii(state.fileList[i]);
+                    if (nameLower.find(keyword) == std::string::npos &&
+                        pathLower.find(keyword) == std::string::npos) {
+                        continue;
+                    }
+                }
+
+                bool isSelected = (i == state.selectedFileIndex);
+                if (ImGui::Selectable(displayName.c_str(), isSelected)) {
+                    state.selectedFileIndex = i;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", state.fileList[i].c_str());
+                }
+            }
+            ImGui::EndChild();
+
+            char brief[96];
+            std::snprintf(brief, sizeof(brief), "总文件数：%zu | 当前选中：%d",
+                          state.fileList.size(),
+                          state.selectedFileIndex >= 0 ? state.selectedFileIndex + 1 : 0);
+            ImGui::TextUnformatted(brief);
+
+            ImGui::EndTabItem();
         }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("清空")) {
-        state.fileList.clear();
-        state.fileSet.clear();
-        state.relativePathMap.clear();
-        state.selectedFileIndex = -1;
-        state.imageViewer.clearImage();
-        state.currentPreviewPath.clear();
-        state.currentBlpBytes.clear();
-        state.previewOriginalRGBA.clear();
-        state.previewAdjustedRGBA.clear();
-        state.currentMeta = ImageMeta();
-    }
 
-    ImGui::Spacing();
-    ImGui::Separator();
+        if (ImGui::BeginTabItem("批量转换")) {
+            ImGui::TextUnformatted("输入来源");
+            ImGui::PushItemWidth(-84);
+            ImGui::InputText("##InputDir", state.inputDirBuf, sizeof(state.inputDirBuf));
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            if (ImGui::Button("浏览##InputBrowse")) {
+                auto folder = openFolderDialog(state.hwnd);
+                if (!folder.empty()) {
+                    std::strncpy(state.inputDirBuf, wideToUtf8(folder).c_str(), sizeof(state.inputDirBuf) - 1);
+                }
+            }
+            ImGui::Checkbox("包含子目录", &state.recursive);
+            ImGui::SameLine();
+            if (ImGui::Button("扫描并添加")) {
+                std::string dir = state.inputDirBuf;
+                if (!dir.empty()) {
+                    namespace fs = std::filesystem;
+                    fs::path dirPath = fsPathFromUtf8(dir);
+                    if (fs::exists(dirPath) && fs::is_directory(dirPath)) {
+                        addFolderFiles(state, dir, state.recursive);
+                    } else {
+                        logMessage(state, "输入目录不存在");
+                    }
+                } else {
+                    logMessage(state, "请先设置输入目录");
+                }
+            }
 
-    // Batch paths
-    ImGui::TextUnformatted("批量路径");
-    ImGui::Spacing();
+            ImGui::Separator();
 
-    ImGui::TextUnformatted("输入目录（可选）：");
-    ImGui::PushItemWidth(-80);
-    ImGui::InputText("##InputDir", state.inputDirBuf, sizeof(state.inputDirBuf));
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    if (ImGui::Button("选择##InputBrowse")) {
-        auto folder = openFolderDialog(state.hwnd);
-        if (!folder.empty()) {
-            std::strncpy(state.inputDirBuf, wideToUtf8(folder).c_str(), sizeof(state.inputDirBuf) - 1);
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("扫描")) {
-        std::string dir = state.inputDirBuf;
-        if (!dir.empty()) {
-            namespace fs = std::filesystem;
-            fs::path dirPath = fsPathFromUtf8(dir);
-            if (fs::exists(dirPath) && fs::is_directory(dirPath)) {
-                addFolderFiles(state, dir, state.recursive);
+            ImGui::TextUnformatted("输出设置");
+            ImGui::PushItemWidth(-84);
+            ImGui::InputText("##OutputDir", state.outputDirBuf, sizeof(state.outputDirBuf));
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            if (ImGui::Button("浏览##OutputBrowse")) {
+                auto folder = openFolderDialog(state.hwnd);
+                if (!folder.empty()) {
+                    std::strncpy(state.outputDirBuf, wideToUtf8(folder).c_str(), sizeof(state.outputDirBuf) - 1);
+                }
+            }
+
+            const char* formatLabels[] = {"BLP", "PNG", "JPG", "BMP", "TGA"};
+            ImGui::Combo("输出格式", &state.outputFormat, formatLabels, IM_ARRAYSIZE(formatLabels));
+
+            const bool qualityEnabled = (state.outputFormat == 0 || state.outputFormat == 2);
+            const char* qualityLabel = (state.outputFormat == 0) ? "BLP 质量"
+                                     : (state.outputFormat == 2) ? "JPG 质量"
+                                     : "质量";
+            if (!qualityEnabled) ImGui::BeginDisabled();
+            ImGui::SliderInt(qualityLabel, &state.quality, 0, 100);
+            if (!qualityEnabled) ImGui::EndDisabled();
+
+            ImGui::Checkbox("覆盖已存在文件", &state.overwrite);
+
+            ImGui::Spacing();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 8));
+            if (state.converting.load()) {
+                ImGui::BeginDisabled();
+                ImGui::Button("转换中...", ImVec2(-1, 0));
+                ImGui::EndDisabled();
             } else {
-                logMessage(state, "输入目录不存在");
+                PushPrimaryButtonStyle();
+                if (ImGui::Button("开始转换", ImVec2(-1, 0))) {
+                    runConvertAllFromUi(state);
+                }
+                PopButtonStyle();
             }
-        } else {
-            logMessage(state, "请先设置输入目录");
+            ImGui::PopStyleVar();
+
+            ImGui::ProgressBar(state.convertProgress.load(), ImVec2(-1, 0));
+
+            ImGui::Separator();
+            if (state.taskDrawerVisible) {
+                ImGui::TextUnformatted("任务面板：已展开");
+            } else {
+                ImGui::TextUnformatted("任务面板：已收起");
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(state.taskDrawerVisible ? "收起任务面板" : "展开任务面板")) {
+                state.taskDrawerVisible = !state.taskDrawerVisible;
+            }
+            char brief[96];
+            std::snprintf(brief, sizeof(brief), "日志条数：%zu", state.logMessages.size());
+            ImGui::TextUnformatted(brief);
+
+            ImGui::EndTabItem();
         }
+        ImGui::EndTabBar();
     }
-
-    ImGui::TextUnformatted("输出目录（必填）：");
-    ImGui::PushItemWidth(-80);
-    ImGui::InputText("##OutputDir", state.outputDirBuf, sizeof(state.outputDirBuf));
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    if (ImGui::Button("选择##OutputBrowse")) {
-        auto folder = openFolderDialog(state.hwnd);
-        if (!folder.empty()) {
-            std::strncpy(state.outputDirBuf, wideToUtf8(folder).c_str(), sizeof(state.outputDirBuf) - 1);
-        }
-    }
-
-    ImGui::Checkbox("包含子目录", &state.recursive);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
-    // Convert settings
-    ImGui::TextUnformatted("转换设置");
-    ImGui::Spacing();
-
-    ImGui::TextUnformatted("输出格式：");
-    ImGui::RadioButton("BLP", &state.outputFormat, 0); ImGui::SameLine();
-    ImGui::RadioButton("PNG", &state.outputFormat, 1); ImGui::SameLine();
-    ImGui::RadioButton("JPG", &state.outputFormat, 2);
-    ImGui::RadioButton("BMP", &state.outputFormat, 3); ImGui::SameLine();
-    ImGui::RadioButton("TGA", &state.outputFormat, 4);
-
-    bool qualityEnabled = (state.outputFormat == 0 || state.outputFormat == 2);
-    const char* qualityLabel = (state.outputFormat == 0) ? "BLP 质量："
-                             : (state.outputFormat == 2) ? "JPG 质量："
-                             : "质量：";
-    ImGui::TextUnformatted(qualityLabel);
-    ImGui::SameLine();
-    if (!qualityEnabled) ImGui::BeginDisabled();
-    ImGui::PushItemWidth(-60);
-    ImGui::SliderInt("##Quality", &state.quality, 0, 100);
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    char qualityText[8];
-    std::snprintf(qualityText, sizeof(qualityText), "%d", state.quality);
-    ImGui::TextUnformatted(qualityText);
-    if (!qualityEnabled) ImGui::EndDisabled();
-
-    ImGui::Checkbox("覆盖已存在文件", &state.overwrite);
-
-    ImGui::Spacing();
-
-    // Convert button
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 8));
-    if (state.converting) {
-        ImGui::BeginDisabled();
-        ImGui::Button("转换中...", ImVec2(-1, 0));
-        ImGui::EndDisabled();
-    } else {
-        if (ImGui::Button("开始转换", ImVec2(-1, 0))) {
-            doConvertAll(state);
-        }
-    }
-    ImGui::PopStyleVar();
-
-    // Progress bar
-    ImGui::ProgressBar(state.convertProgress.load(), ImVec2(-1, 0));
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
-    // Log
-    ImGui::TextUnformatted("日志");
-    float logH = ImGui::GetContentRegionAvail().y;
-    ImGui::BeginChild("LogArea", ImVec2(-1, logH), ImGuiChildFlags_Borders);
-    for (const auto& msg : state.logMessages) {
-        ImGui::TextWrapped("%s", msg.c_str());
-    }
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-        ImGui::SetScrollHereY(1.0f);
-    }
-    ImGui::EndChild();
 
     ImGui::PopStyleColor(); // ChildBg
+}
+
+void runConvertAllFromUi(AppState& state) {
+    doConvertAll(state);
+}
+
+void runConvertForPaths(AppState& state, const std::vector<std::string>& inputPaths) {
+    runConvertForPathsInternal(state, inputPaths);
 }

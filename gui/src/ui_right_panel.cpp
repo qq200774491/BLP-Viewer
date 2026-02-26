@@ -1,5 +1,6 @@
 #include "ui_right_panel.h"
 #include "ui_main.h"
+#include "style.h"
 #include "utils.h"
 #include "win_integration.h"
 
@@ -258,11 +259,49 @@ void renderRightPanel(AppState& state) {
         }
     }
 
+    const bool hasImage = state.currentMeta.width > 0;
+    const bool isPot = isPowerOfTwo(state.currentMeta.width) && isPowerOfTwo(state.currentMeta.height);
+
+    auto getActiveSource = [&](const std::vector<uint8_t>** outPixels, int* outW, int* outH) -> bool {
+        if (!outPixels || !outW || !outH) return false;
+        if (state.previewAdjusted && !state.previewAdjustedRGBA.empty()) {
+            *outPixels = &state.previewAdjustedRGBA;
+            *outW = state.previewAdjW;
+            *outH = state.previewAdjH;
+        } else {
+            *outPixels = &state.previewOriginalRGBA;
+            *outW = state.previewOrigW;
+            *outH = state.previewOrigH;
+        }
+        return *outPixels && !(*outPixels)->empty() && *outW > 0 && *outH > 0;
+    };
+
+    auto resizeAndSave = [&](int targetW, int targetH, const char* successPrefix) {
+        const std::vector<uint8_t>* source = nullptr;
+        int srcW = 0;
+        int srcH = 0;
+        if (!getActiveSource(&source, &srcW, &srcH)) return;
+
+        if (srcW == targetW && srcH == targetH) {
+            logMsg(state, "尺寸未变化，无需保存");
+            return;
+        }
+
+        std::vector<uint8_t> resized(static_cast<size_t>(targetW) * targetH * 4);
+        stbir_resize_uint8_linear(source->data(), srcW, srcH, srcW * 4,
+                                  resized.data(), targetW, targetH, targetW * 4, STBIR_RGBA);
+        std::string error;
+        if (saveAlignedToSource(state, resized, targetW, targetH, &error)) {
+            char msg[128];
+            std::snprintf(msg, sizeof(msg), "%s：%d x %d", successPrefix, targetW, targetH);
+            logMsg(state, msg);
+        } else {
+            logMsg(state, "调整尺寸失败：" + error);
+        }
+    };
+
     // Info bar
     {
-        bool isPot = isPowerOfTwo(state.currentMeta.width) && isPowerOfTwo(state.currentMeta.height);
-        bool hasImage = state.currentMeta.width > 0;
-
         if (!isPot && hasImage) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1.0f, 0.941f, 0.941f, 1.0f));
         } else {
@@ -289,7 +328,7 @@ void renderRightPanel(AppState& state) {
             }
 
             if (!isPot) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.753f, 0.224f, 0.169f, 1.0f)); // #c0392b
+                ImGui::PushStyleColor(ImGuiCol_Text, UiColorWarning());
             }
             ImGui::TextUnformatted(infoStr.c_str());
             if (!isPot) {
@@ -307,8 +346,7 @@ void renderRightPanel(AppState& state) {
     {
         float previewH = ImGui::GetContentRegionAvail().y;
         // Reserve space for mip list, resize, zoom controls
-        if (state.currentIsBlp && !state.mipEntries.empty()) previewH -= 145 * state.dpiScale;
-        if (state.currentMeta.width > 0) previewH -= 100 * state.dpiScale; // resize + zoom
+        if (hasImage) previewH -= 210 * state.dpiScale;
         previewH = std::max(previewH, 200.0f);
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.878f, 0.894f, 0.922f, 1.0f));
@@ -316,124 +354,7 @@ void renderRightPanel(AppState& state) {
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
 
-        // POT overlay buttons (top-left)
-        if (state.currentMeta.width > 0) {
-            bool originalIsPot = isPowerOfTwo(state.previewOrigW) && isPowerOfTwo(state.previewOrigH);
-            bool showPow2 = !originalIsPot || state.previewAdjusted;
-
-            if (showPow2) {
-                ImGui::SetCursorPos(ImVec2(8, 8));
-
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1, 1, 1, 0.92f));
-                ImGui::BeginChild("POW2Overlay", ImVec2(0, 30 * state.dpiScale), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_Borders);
-
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.357f, 0.392f, 0.447f, 1.0f));
-                ImGui::TextUnformatted("非 2 次幂");
-                ImGui::PopStyleColor();
-                ImGui::SameLine();
-
-                bool canAlign = !originalIsPot && !state.previewAdjusted;
-                if (!canAlign) ImGui::BeginDisabled();
-                if (ImGui::SmallButton("拉伸对齐2次幂")) {
-                    int targetW = nearestPowerOfTwo(state.previewOrigW);
-                    int targetH = nearestPowerOfTwo(state.previewOrigH);
-                    if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
-                        std::vector<uint8_t> resized(targetW * targetH * 4);
-                        stbir_resize_uint8_linear(
-                            state.previewOriginalRGBA.data(), state.previewOrigW, state.previewOrigH, state.previewOrigW * 4,
-                            resized.data(), targetW, targetH, targetW * 4,
-                            STBIR_RGBA);
-                        std::string error;
-                        if (saveAlignedToSource(state, resized, targetW, targetH, &error)) {
-                            logMsg(state, "已拉伸对齐 2 次幂并保存");
-                        } else {
-                            logMsg(state, "对齐失败：" + error);
-                        }
-                    }
-                }
-                if (!canAlign) ImGui::EndDisabled();
-                ImGui::SameLine();
-
-                if (!canAlign) ImGui::BeginDisabled();
-                if (ImGui::SmallButton("居中对齐2次幂")) {
-                    int targetW = nextPowerOfTwo(state.previewOrigW);
-                    int targetH = nextPowerOfTwo(state.previewOrigH);
-                    if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
-                        std::vector<uint8_t> centered(targetW * targetH * 4, 0);
-                        int offX = (targetW - state.previewOrigW) / 2;
-                        int offY = (targetH - state.previewOrigH) / 2;
-                        for (int y = 0; y < state.previewOrigH; ++y) {
-                            memcpy(centered.data() + ((y + offY) * targetW + offX) * 4,
-                                   state.previewOriginalRGBA.data() + y * state.previewOrigW * 4,
-                                   state.previewOrigW * 4);
-                        }
-                        std::string error;
-                        if (saveAlignedToSource(state, centered, targetW, targetH, &error)) {
-                            logMsg(state, "已居中对齐 2 次幂并保存");
-                        } else {
-                            logMsg(state, "居中对齐失败：" + error);
-                        }
-                    }
-                }
-                if (!canAlign) ImGui::EndDisabled();
-                ImGui::SameLine();
-
-                bool canRestore = state.previewAdjusted && state.hasOriginalBackup;
-                if (!canRestore) ImGui::BeginDisabled();
-                if (ImGui::SmallButton("恢复")) {
-                    std::string error;
-                    if (writeFileBytes(state.currentPreviewPath, state.originalFileBytes, &error)) {
-                        state.currentMeta = state.originalMeta;
-                        state.previewAdjusted = false;
-                        state.previewAdjustedRGBA.clear();
-                        updatePreview(state, state.currentPreviewPath);
-                        logMsg(state, "已恢复原始文件");
-                    } else {
-                        logMsg(state, "恢复失败：" + error);
-                    }
-                }
-                if (!canRestore) ImGui::EndDisabled();
-
-                ImGui::EndChild();
-                ImGui::PopStyleColor();
-            }
-
-            // Alpha toggle + background picker (top-right)
-            ImVec2 topRight = ImVec2(avail.x - 8, 8);
-            ImGui::SetCursorPos(ImVec2(topRight.x - 240, topRight.y));
-
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1, 1, 1, 0.92f));
-            ImGui::BeginChild("BgOverlay", ImVec2(0, 30 * state.dpiScale), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_Borders);
-
-            if (state.currentIsBlp) {
-                if (ImGui::Checkbox("显示透明通道", &state.previewUseAlpha)) {
-                    refreshPreviewDisplay(state);
-                }
-                ImGui::SameLine();
-            }
-
-            if (ImGui::SmallButton("背景")) {
-                ImGui::OpenPopup("BgColorPicker");
-            }
-            if (ImGui::BeginPopup("BgColorPicker")) {
-                if (ImGui::ColorPicker3("##bgpicker", state.imageViewer.bgColor)) {
-                    state.imageViewer.useCheckerboard = false;
-                }
-                if (ImGui::Button("恢复默认")) {
-                    state.imageViewer.bgColor[0] = 0.878f;
-                    state.imageViewer.bgColor[1] = 0.894f;
-                    state.imageViewer.bgColor[2] = 0.922f;
-                    state.imageViewer.useCheckerboard = true;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-        }
-
-        // Render image viewer in remaining space
+        // Stage-only preview, controls moved to inspector panels below.
         ImGui::SetCursorPos(ImVec2(0, 0));
         state.imageViewer.render(avail.x, avail.y);
 
@@ -446,10 +367,54 @@ void renderRightPanel(AppState& state) {
         ImGui::PopStyleColor();
     }
 
-    // Mip list (BLP only)
-    if (state.currentIsBlp && !state.mipEntries.empty()) {
-        ImGui::TextUnformatted("BLP 层级");
-        ImGui::BeginChild("MipList", ImVec2(-1, 110 * state.dpiScale), ImGuiChildFlags_Borders);
+    if (hasImage && ImGui::CollapsingHeader("预览设置", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (state.currentIsBlp) {
+            if (ImGui::Checkbox("显示透明通道", &state.previewUseAlpha)) {
+                refreshPreviewDisplay(state);
+            }
+        }
+
+        if (ImGui::Button("背景颜色")) {
+            ImGui::OpenPopup("BgColorPicker");
+        }
+        if (ImGui::BeginPopup("BgColorPicker")) {
+            if (ImGui::ColorPicker3("##bgpicker", state.imageViewer.bgColor)) {
+                state.imageViewer.useCheckerboard = false;
+            }
+            if (ImGui::Button("恢复默认")) {
+                state.imageViewer.bgColor[0] = 0.878f;
+                state.imageViewer.bgColor[1] = 0.894f;
+                state.imageViewer.bgColor[2] = 0.922f;
+                state.imageViewer.useCheckerboard = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::Button("适应窗口")) {
+            state.imageViewer.fitMode = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("原始大小")) {
+            state.imageViewer.setZoom(1.0f);
+            state.imageViewer.fitMode = false;
+        }
+        ImGui::SameLine();
+        ImGui::PushItemWidth(-1);
+        int zoomPct = static_cast<int>(state.imageViewer.zoom * 100.0f + 0.5f);
+        zoomPct = std::clamp(zoomPct, 10, 400);
+        if (ImGui::SliderInt("##ZoomPreview", &zoomPct, 10, 400, "%d%%")) {
+            state.imageViewer.setZoom(zoomPct / 100.0f);
+            state.imageViewer.fitMode = false;
+        }
+        state.zoomPercent = zoomPct;
+        ImGui::PopItemWidth();
+    }
+
+    // BLP mip inspector
+    if (state.currentIsBlp && !state.mipEntries.empty() &&
+        ImGui::CollapsingHeader("BLP 层级")) {
+        ImGui::BeginChild("MipList", ImVec2(-1, 120 * state.dpiScale), ImGuiChildFlags_Borders);
 
         for (int i = 0; i < 16; ++i) {
             int mipW = std::max(1, state.previewOrigW >> i);
@@ -521,15 +486,8 @@ void renderRightPanel(AppState& state) {
         ImGui::EndChild();
     }
 
-    // Resize controls
-    if (state.currentMeta.width > 0) {
-        ImGui::TextUnformatted("调整图像大小");
-
-        // Width slider
-        ImGui::TextUnformatted("宽");
-        ImGui::SameLine();
-        ImGui::PushItemWidth(-80);
-        if (ImGui::SliderInt("##ResizeWidth", &state.resizeWidth, 1, 16384)) {
+    if (hasImage && ImGui::CollapsingHeader("尺寸调整", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::SliderInt("宽##ResizeWidth", &state.resizeWidth, 1, 16384)) {
             state.resizeWidth = snapResizeValue(state.resizeWidth);
             if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
                 state.resizeAspectSyncing = true;
@@ -538,17 +496,7 @@ void renderRightPanel(AppState& state) {
                 state.resizeAspectSyncing = false;
             }
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        char wBuf[16];
-        std::snprintf(wBuf, sizeof(wBuf), "%d px", state.resizeWidth);
-        ImGui::TextUnformatted(wBuf);
-
-        // Height slider
-        ImGui::TextUnformatted("高");
-        ImGui::SameLine();
-        ImGui::PushItemWidth(-80);
-        if (ImGui::SliderInt("##ResizeHeight", &state.resizeHeight, 1, 16384)) {
+        if (ImGui::SliderInt("高##ResizeHeight", &state.resizeHeight, 1, 16384)) {
             state.resizeHeight = snapResizeValue(state.resizeHeight);
             if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
                 state.resizeAspectSyncing = true;
@@ -557,122 +505,91 @@ void renderRightPanel(AppState& state) {
                 state.resizeAspectSyncing = false;
             }
         }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        char hBuf[16];
-        std::snprintf(hBuf, sizeof(hBuf), "%d px", state.resizeHeight);
-        ImGui::TextUnformatted(hBuf);
 
-        // Preset buttons and controls
-        if (ImGui::Button("64x64")) {
+        ImGui::Checkbox("锁定宽高比", &state.resizeLockAspect);
+        if (ImGui::Button("64 x 64")) {
             state.resizeWidth = 64;
             state.resizeHeight = 64;
-            // Auto resize+save
-            const auto& source = (state.previewAdjusted && !state.previewAdjustedRGBA.empty())
-                                     ? state.previewAdjustedRGBA : state.previewOriginalRGBA;
-            int srcW = state.previewAdjusted ? state.previewAdjW : state.previewOrigW;
-            int srcH = state.previewAdjusted ? state.previewAdjH : state.previewOrigH;
-            if (!source.empty() && srcW > 0 && srcH > 0) {
-                std::vector<uint8_t> resized(64 * 64 * 4);
-                stbir_resize_uint8_linear(source.data(), srcW, srcH, srcW * 4,
-                                          resized.data(), 64, 64, 64 * 4, STBIR_RGBA);
-                std::string error;
-                if (saveAlignedToSource(state, resized, 64, 64, &error)) {
-                    logMsg(state, "已调整图像尺寸并保存：64 x 64");
-                } else {
-                    logMsg(state, "调整尺寸失败：" + error);
-                }
-            }
+            resizeAndSave(64, 64, "已调整图像尺寸并保存");
         }
         ImGui::SameLine();
-        if (ImGui::Button("128x128")) {
+        if (ImGui::Button("128 x 128")) {
             state.resizeWidth = 128;
             state.resizeHeight = 128;
-            const auto& source = (state.previewAdjusted && !state.previewAdjustedRGBA.empty())
-                                     ? state.previewAdjustedRGBA : state.previewOriginalRGBA;
-            int srcW = state.previewAdjusted ? state.previewAdjW : state.previewOrigW;
-            int srcH = state.previewAdjusted ? state.previewAdjH : state.previewOrigH;
-            if (!source.empty() && srcW > 0 && srcH > 0) {
-                std::vector<uint8_t> resized(128 * 128 * 4);
-                stbir_resize_uint8_linear(source.data(), srcW, srcH, srcW * 4,
-                                          resized.data(), 128, 128, 128 * 4, STBIR_RGBA);
-                std::string error;
-                if (saveAlignedToSource(state, resized, 128, 128, &error)) {
-                    logMsg(state, "已调整图像尺寸并保存：128 x 128");
-                } else {
-                    logMsg(state, "调整尺寸失败：" + error);
-                }
-            }
+            resizeAndSave(128, 128, "已调整图像尺寸并保存");
         }
         ImGui::SameLine();
-        if (ImGui::Button("256x256")) {
+        if (ImGui::Button("256 x 256")) {
             state.resizeWidth = 256;
             state.resizeHeight = 256;
-            const auto& source = (state.previewAdjusted && !state.previewAdjustedRGBA.empty())
-                                     ? state.previewAdjustedRGBA : state.previewOriginalRGBA;
-            int srcW = state.previewAdjusted ? state.previewAdjW : state.previewOrigW;
-            int srcH = state.previewAdjusted ? state.previewAdjH : state.previewOrigH;
-            if (!source.empty() && srcW > 0 && srcH > 0) {
-                std::vector<uint8_t> resized(256 * 256 * 4);
-                stbir_resize_uint8_linear(source.data(), srcW, srcH, srcW * 4,
-                                          resized.data(), 256, 256, 256 * 4, STBIR_RGBA);
+            resizeAndSave(256, 256, "已调整图像尺寸并保存");
+        }
+
+        PushPrimaryButtonStyle();
+        if (ImGui::Button("按当前尺寸保存", ImVec2(-1, 0))) {
+            resizeAndSave(std::max(1, state.resizeWidth), std::max(1, state.resizeHeight), "已调整图像尺寸并保存");
+        }
+        PopButtonStyle();
+    }
+
+    if (hasImage && ImGui::CollapsingHeader("对齐与恢复")) {
+        const bool originalIsPot = isPowerOfTwo(state.previewOrigW) && isPowerOfTwo(state.previewOrigH);
+        const bool canAlign = !originalIsPot && !state.previewAdjusted;
+        if (!canAlign) ImGui::BeginDisabled();
+        if (ImGui::Button("拉伸对齐 2 次幂", ImVec2(-1, 0))) {
+            int targetW = nearestPowerOfTwo(state.previewOrigW);
+            int targetH = nearestPowerOfTwo(state.previewOrigH);
+            if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
+                std::vector<uint8_t> resized(targetW * targetH * 4);
+                stbir_resize_uint8_linear(
+                    state.previewOriginalRGBA.data(), state.previewOrigW, state.previewOrigH, state.previewOrigW * 4,
+                    resized.data(), targetW, targetH, targetW * 4, STBIR_RGBA);
                 std::string error;
-                if (saveAlignedToSource(state, resized, 256, 256, &error)) {
-                    logMsg(state, "已调整图像尺寸并保存：256 x 256");
+                if (saveAlignedToSource(state, resized, targetW, targetH, &error)) {
+                    logMsg(state, "已拉伸对齐 2 次幂并保存");
                 } else {
-                    logMsg(state, "调整尺寸失败：" + error);
+                    logMsg(state, "对齐失败：" + error);
                 }
             }
         }
-        ImGui::SameLine();
-        ImGui::Checkbox("锁定宽高比", &state.resizeLockAspect);
-        ImGui::SameLine();
-
-        if (ImGui::Button("调整并保存")) {
-            if (state.resizeWidth > 0 && state.resizeHeight > 0 && !state.previewOriginalRGBA.empty()) {
-                const auto& source = (state.previewAdjusted && !state.previewAdjustedRGBA.empty())
-                                         ? state.previewAdjustedRGBA : state.previewOriginalRGBA;
-                int srcW = state.previewAdjusted ? state.previewAdjW : state.previewOrigW;
-                int srcH = state.previewAdjusted ? state.previewAdjH : state.previewOrigH;
-
-                if (srcW == state.resizeWidth && srcH == state.resizeHeight) {
-                    logMsg(state, "尺寸未变化，无需保存");
+        if (ImGui::Button("居中对齐 2 次幂", ImVec2(-1, 0))) {
+            int targetW = nextPowerOfTwo(state.previewOrigW);
+            int targetH = nextPowerOfTwo(state.previewOrigH);
+            if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
+                std::vector<uint8_t> centered(targetW * targetH * 4, 0);
+                int offX = (targetW - state.previewOrigW) / 2;
+                int offY = (targetH - state.previewOrigH) / 2;
+                for (int y = 0; y < state.previewOrigH; ++y) {
+                    memcpy(centered.data() + ((y + offY) * targetW + offX) * 4,
+                           state.previewOriginalRGBA.data() + y * state.previewOrigW * 4,
+                           state.previewOrigW * 4);
+                }
+                std::string error;
+                if (saveAlignedToSource(state, centered, targetW, targetH, &error)) {
+                    logMsg(state, "已居中对齐 2 次幂并保存");
                 } else {
-                    std::vector<uint8_t> resized(state.resizeWidth * state.resizeHeight * 4);
-                    stbir_resize_uint8_linear(source.data(), srcW, srcH, srcW * 4,
-                                              resized.data(), state.resizeWidth, state.resizeHeight,
-                                              state.resizeWidth * 4, STBIR_RGBA);
-                    std::string error;
-                    if (saveAlignedToSource(state, resized, state.resizeWidth, state.resizeHeight, &error)) {
-                        char msg[128];
-                        std::snprintf(msg, sizeof(msg), "已调整图像尺寸并保存：%d x %d",
-                                      state.resizeWidth, state.resizeHeight);
-                        logMsg(state, msg);
-                    } else {
-                        logMsg(state, "调整尺寸失败：" + error);
-                    }
+                    logMsg(state, "居中对齐失败：" + error);
                 }
             }
         }
+        if (!canAlign) ImGui::EndDisabled();
 
-        // Zoom controls
-        ImGui::Separator();
-        if (ImGui::Button("适应窗口")) {
-            ImVec2 avail = ImGui::GetContentRegionAvail();
-            state.imageViewer.fitToView(avail.x, avail.y);
+        const bool canRestore = state.previewAdjusted && state.hasOriginalBackup;
+        if (!canRestore) ImGui::BeginDisabled();
+        PushDangerButtonStyle();
+        if (ImGui::Button("恢复原始文件", ImVec2(-1, 0))) {
+            std::string error;
+            if (writeFileBytes(state.currentPreviewPath, state.originalFileBytes, &error)) {
+                state.currentMeta = state.originalMeta;
+                state.previewAdjusted = false;
+                state.previewAdjustedRGBA.clear();
+                updatePreview(state, state.currentPreviewPath);
+                logMsg(state, "已恢复原始文件");
+            } else {
+                logMsg(state, "恢复失败：" + error);
+            }
         }
-        ImGui::SameLine();
-        if (ImGui::Button("原始大小")) {
-            state.imageViewer.setZoom(1.0f);
-        }
-        ImGui::SameLine();
-        ImGui::PushItemWidth(-1);
-        int zoomPct = static_cast<int>(state.imageViewer.zoom * 100.0f + 0.5f);
-        zoomPct = std::clamp(zoomPct, 10, 400);
-        if (ImGui::SliderInt("##Zoom", &zoomPct, 10, 400, "%d%%")) {
-            state.imageViewer.setZoom(zoomPct / 100.0f);
-        }
-        state.zoomPercent = zoomPct;
-        ImGui::PopItemWidth();
+        PopButtonStyle();
+        if (!canRestore) ImGui::EndDisabled();
     }
 }
