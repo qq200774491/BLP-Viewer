@@ -248,10 +248,17 @@ bool saveAlignedToSource(AppState& state, const std::vector<uint8_t>& rgba,
 void renderRightPanel(AppState& state) {
     // Check if selected file changed
     static int lastSelectedIndex = -2;
-    if (state.selectedFileIndex != lastSelectedIndex) {
+    static std::string lastSelectedPath;
+    std::string selectedPath;
+    if (state.selectedFileIndex >= 0 && state.selectedFileIndex < static_cast<int>(state.fileList.size())) {
+        selectedPath = state.fileList[state.selectedFileIndex];
+    }
+
+    if (state.selectedFileIndex != lastSelectedIndex || selectedPath != lastSelectedPath) {
         lastSelectedIndex = state.selectedFileIndex;
+        lastSelectedPath = selectedPath;
         if (state.selectedFileIndex >= 0 && state.selectedFileIndex < static_cast<int>(state.fileList.size())) {
-            updatePreview(state, state.fileList[state.selectedFileIndex]);
+            updatePreview(state, selectedPath);
         } else {
             state.imageViewer.clearImage();
             state.currentPreviewPath.clear();
@@ -300,25 +307,10 @@ void renderRightPanel(AppState& state) {
         }
     };
 
-    // Preview canvas (info + toolbar + stage + bottom-left tools)
+    // Preview canvas (info + toolbar + stage)
     {
         float remainingH = ImGui::GetContentRegionAvail().y;
-        float previewH = remainingH;
-        if (hasImage) {
-            // Reserve height for inspector sections below preview canvas.
-            float inspectorReserve = 150.0f * state.dpiScale;
-            if (state.currentIsBlp && !state.mipEntries.empty()) {
-                inspectorReserve += 50.0f * state.dpiScale;
-            }
-            if (remainingH <= 560.0f * state.dpiScale) {
-                inspectorReserve += 30.0f * state.dpiScale;
-            }
-            previewH -= inspectorReserve;
-        }
-        const float minPreviewH = (remainingH <= 560.0f * state.dpiScale)
-            ? (160.0f * state.dpiScale)
-            : (200.0f * state.dpiScale);
-        previewH = std::max(previewH, minPreviewH);
+        const float previewH = std::max(120.0f * state.dpiScale, remainingH);
 
         ImGui::PushStyleColor(
             ImGuiCol_ChildBg,
@@ -382,76 +374,12 @@ void renderRightPanel(AppState& state) {
             std::snprintf(zoomText, sizeof(zoomText), "缩放：%d%%",
                           std::max(1, static_cast<int>(state.imageViewer.zoom * 100.0f + 0.5f)));
             ImGui::TextUnformatted(zoomText);
-        } else {
-            ImGui::TextUnformatted("未加载图像");
-        }
-
-        ImGui::Separator();
-
-        const ImVec2 stagePos = ImGui::GetCursorPos();
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        state.imageViewer.render(avail.x, avail.y);
-
-        // Handle resize on fit
-        if (state.imageViewer.fitMode && state.imageViewer.hasImage) {
-            state.imageViewer.fitToView(avail.x, avail.y);
-        }
-
-        state.zoomPercent = std::max(1, static_cast<int>(state.imageViewer.zoom * 100.0f + 0.5f));
-
-        if (hasImage) {
-            const float panelW = std::min(320.0f * state.dpiScale, std::max(220.0f * state.dpiScale, avail.x - 16.0f * state.dpiScale));
-            const float panelH = 212.0f * state.dpiScale;
-            float panelX = stagePos.x + 8.0f * state.dpiScale;
-            float panelY = stagePos.y + avail.y - panelH - 8.0f * state.dpiScale;
-            panelY = std::max(panelY, stagePos.y + 8.0f * state.dpiScale);
-
-            ImGui::SetCursorPos(ImVec2(panelX, panelY));
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1.0f, 1.0f, 1.0f, 0.78f));
-            ImGui::BeginChild(
-                "CanvasBottomLeftTools",
-                ImVec2(panelW, panelH),
-                ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
-                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-            ImGui::TextUnformatted("尺寸与对齐");
-            ImGui::SetNextItemWidth(80.0f * state.dpiScale);
-            if (ImGui::InputInt("宽##CanvasResizeWidth", &state.resizeWidth, 0, 0)) {
-                state.resizeWidth = std::clamp(state.resizeWidth, 1, 16384);
-                state.resizeWidth = snapResizeValue(state.resizeWidth);
-                if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
-                    state.resizeAspectSyncing = true;
-                    state.resizeHeight = std::max(1,
-                        static_cast<int>((static_cast<int64_t>(state.resizeWidth) * state.previewOrigH + state.previewOrigW / 2) / state.previewOrigW));
-                    state.resizeAspectSyncing = false;
-                }
-            }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(80.0f * state.dpiScale);
-            if (ImGui::InputInt("高##CanvasResizeHeight", &state.resizeHeight, 0, 0)) {
-                state.resizeHeight = std::clamp(state.resizeHeight, 1, 16384);
-                state.resizeHeight = snapResizeValue(state.resizeHeight);
-                if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
-                    state.resizeAspectSyncing = true;
-                    state.resizeWidth = std::max(1,
-                        static_cast<int>((static_cast<int64_t>(state.resizeHeight) * state.previewOrigW + state.previewOrigH / 2) / state.previewOrigH));
-                    state.resizeAspectSyncing = false;
-                }
-            }
-            ImGui::SameLine();
-            ImGui::Checkbox("锁定比例", &state.resizeLockAspect);
-
-            PushPrimaryButtonStyle();
-            if (ImGui::Button("按当前尺寸保存", ImVec2(-1, 0))) {
-                resizeAndSave(std::max(1, state.resizeWidth), std::max(1, state.resizeHeight), "已调整图像尺寸并保存");
-            }
-            PopButtonStyle();
 
             const bool originalIsPot = isPowerOfTwo(state.previewOrigW) && isPowerOfTwo(state.previewOrigH);
             const bool canAlign = !originalIsPot && !state.previewAdjusted;
+            ImGui::SameLine();
             if (!canAlign) ImGui::BeginDisabled();
-            const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-            if (ImGui::Button("拉伸对齐 2 次幂", ImVec2(halfW, 0))) {
+            if (ImGui::SmallButton("拉伸2次幂")) {
                 int targetW = nearestPowerOfTwo(state.previewOrigW);
                 int targetH = nearestPowerOfTwo(state.previewOrigH);
                 if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
@@ -468,7 +396,7 @@ void renderRightPanel(AppState& state) {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("居中对齐 2 次幂", ImVec2(-1, 0))) {
+            if (ImGui::SmallButton("居中2次幂")) {
                 int targetW = nextPowerOfTwo(state.previewOrigW);
                 int targetH = nextPowerOfTwo(state.previewOrigH);
                 if (targetW != state.previewOrigW || targetH != state.previewOrigH) {
@@ -490,10 +418,40 @@ void renderRightPanel(AppState& state) {
             }
             if (!canAlign) ImGui::EndDisabled();
 
+            ImGui::SetNextItemWidth(78.0f * state.dpiScale);
+            if (ImGui::InputInt("宽##ToolbarResizeWidth", &state.resizeWidth, 0, 0)) {
+                state.resizeWidth = std::clamp(state.resizeWidth, 1, 16384);
+                if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
+                    state.resizeAspectSyncing = true;
+                    state.resizeHeight = std::max(1,
+                        static_cast<int>((static_cast<int64_t>(state.resizeWidth) * state.previewOrigH + state.previewOrigW / 2) / state.previewOrigW));
+                    state.resizeAspectSyncing = false;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(78.0f * state.dpiScale);
+            if (ImGui::InputInt("高##ToolbarResizeHeight", &state.resizeHeight, 0, 0)) {
+                state.resizeHeight = std::clamp(state.resizeHeight, 1, 16384);
+                if (state.resizeLockAspect && state.previewOrigW > 0 && state.previewOrigH > 0) {
+                    state.resizeAspectSyncing = true;
+                    state.resizeWidth = std::max(1,
+                        static_cast<int>((static_cast<int64_t>(state.resizeHeight) * state.previewOrigW + state.previewOrigH / 2) / state.previewOrigH));
+                    state.resizeAspectSyncing = false;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("锁比例", &state.resizeLockAspect);
+            ImGui::SameLine();
+            PushPrimaryButtonStyle();
+            if (ImGui::Button("保存尺寸")) {
+                resizeAndSave(std::max(1, state.resizeWidth), std::max(1, state.resizeHeight), "已调整图像尺寸并保存");
+            }
+            PopButtonStyle();
+            ImGui::SameLine();
             const bool canRestore = state.previewAdjusted && state.hasOriginalBackup;
             if (!canRestore) ImGui::BeginDisabled();
             PushDangerButtonStyle();
-            if (ImGui::Button("恢复原始文件", ImVec2(-1, 0))) {
+            if (ImGui::Button("恢复原图")) {
                 std::string error;
                 if (writeFileBytes(state.currentPreviewPath, state.originalFileBytes, &error)) {
                     state.currentMeta = state.originalMeta;
@@ -507,6 +465,59 @@ void renderRightPanel(AppState& state) {
             }
             PopButtonStyle();
             if (!canRestore) ImGui::EndDisabled();
+        } else {
+            ImGui::TextUnformatted("未加载图像");
+        }
+
+        ImGui::Separator();
+
+        const ImVec2 stagePos = ImGui::GetCursorPos();
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        state.imageViewer.render(avail.x, avail.y);
+
+        // Handle resize on fit
+        if (state.imageViewer.fitMode && state.imageViewer.hasImage) {
+            state.imageViewer.fitToView(avail.x, avail.y);
+        }
+
+        state.zoomPercent = std::max(1, static_cast<int>(state.imageViewer.zoom * 100.0f + 0.5f));
+
+        if (hasImage && state.currentIsBlp && !state.mipEntries.empty()) {
+            const float pad = 8.0f * state.dpiScale;
+            const float panelW = std::min(300.0f * state.dpiScale, std::max(220.0f * state.dpiScale, avail.x * 0.40f));
+            const float lineH = ImGui::GetTextLineHeightWithSpacing();
+            const int maxLines = std::max(1, static_cast<int>((avail.y - 56.0f * state.dpiScale) / lineH));
+            const int shownCount = std::min(static_cast<int>(state.mipEntries.size()), maxLines);
+            const int restCount = static_cast<int>(state.mipEntries.size()) - shownCount;
+            float panelH = (2.0f * lineH) + shownCount * lineH + (restCount > 0 ? lineH : 0.0f);
+            panelH = std::min(panelH, std::max(80.0f * state.dpiScale, avail.y - 2.0f * pad));
+
+            const float panelX = stagePos.x + avail.x - panelW - pad;
+            const float panelY = std::max(stagePos.y + pad, stagePos.y + avail.y - panelH - pad);
+
+            ImGui::SetCursorPos(ImVec2(panelX, panelY));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1.0f, 1.0f, 1.0f, 0.76f));
+            ImGui::BeginChild(
+                "CanvasMipOverlay",
+                ImVec2(panelW, panelH),
+                ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+            ImGui::TextUnformatted("BLP 层级");
+            ImGui::Separator();
+
+            const int baseW = std::max(1, state.currentMeta.width);
+            const int baseH = std::max(1, state.currentMeta.height);
+            for (int i = 0; i < shownCount; ++i) {
+                const BlpMipEntry& entry = state.mipEntries[i];
+                const int mipW = std::max(1, baseW >> entry.index);
+                const int mipH = std::max(1, baseH >> entry.index);
+                std::string sizeStr = formatFileSize(entry.size);
+                ImGui::Text("第%d层 %d x %d | %s", entry.index + 1, mipW, mipH, sizeStr.c_str());
+            }
+            if (restCount > 0) {
+                ImGui::Text("其余 %d 层...", restCount);
+            }
 
             ImGui::EndChild();
             ImGui::PopStyleColor();
@@ -515,80 +526,4 @@ void renderRightPanel(AppState& state) {
         ImGui::EndChild();
         ImGui::PopStyleColor();
     }
-
-    // BLP mip inspector
-    if (state.currentIsBlp && !state.mipEntries.empty() &&
-        ImGui::CollapsingHeader("BLP 层级")) {
-        ImGui::BeginChild("MipList", ImVec2(-1, 120 * state.dpiScale), ImGuiChildFlags_Borders);
-
-        for (int i = 0; i < 16; ++i) {
-            int mipW = std::max(1, state.previewOrigW >> i);
-            int mipH = std::max(1, state.previewOrigH >> i);
-
-            const BlpMipEntry* entry = nullptr;
-            for (const auto& e : state.mipEntries) {
-                if (e.index == i) { entry = &e; break; }
-            }
-
-            bool hasData = (entry && entry->offset != 0 && entry->size != 0) || i == 0;
-            char label[128];
-            if (hasData) {
-                std::string sizeStr = entry ? formatFileSize(entry->size) : "未知大小";
-                std::snprintf(label, sizeof(label), "第%d层（%d x %d，%s）",
-                              i + 1, mipW, mipH, sizeStr.c_str());
-            } else {
-                std::snprintf(label, sizeof(label), "第%d层（无数据）", i + 1);
-            }
-
-            if (!hasData) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.549f, 0.573f, 0.612f, 1.0f));
-                ImGui::TextUnformatted(label);
-                ImGui::PopStyleColor();
-            } else {
-                bool selected = (i == state.selectedMipIndex);
-                if (ImGui::Selectable(label, selected)) {
-                    if (i != state.currentMipIndex && !state.currentBlpBytes.empty()) {
-                        // Decode mip to temp file and load
-                        wchar_t tempPath[MAX_PATH] = {};
-                        wchar_t tempDir[MAX_PATH] = {};
-                        GetTempPathW(MAX_PATH, tempDir);
-                        GetTempFileNameW(tempDir, L"blp", 0, tempPath);
-
-                        char narrowPath[MAX_PATH * 3] = {};
-                        WideCharToMultiByte(CP_UTF8, 0, tempPath, -1, narrowPath, sizeof(narrowPath), nullptr, nullptr);
-
-                        // Rename to .png
-                        std::string pngPath = std::string(narrowPath) + ".png";
-                        std::string error;
-                        if (state.blpApi.decodeMipToPngFromBuffer(state.currentBlpBytes, i, pngPath, &error)) {
-                            RgbaImage mipImage;
-                            if (loadImageFile(pngPath, &mipImage, nullptr, &error, &state.blpApi)) {
-                                state.previewOriginalRGBA = mipImage.pixels;
-                                state.previewOrigW = mipImage.width;
-                                state.previewOrigH = mipImage.height;
-                                state.previewAdjusted = false;
-                                state.previewAdjustedRGBA.clear();
-                                state.currentMipIndex = i;
-                                state.selectedMipIndex = i;
-                                state.resizeWidth = mipImage.width;
-                                state.resizeHeight = mipImage.height;
-                                refreshPreviewDisplay(state);
-                            } else {
-                                logMsg(state, "层级预览失败：" + error);
-                            }
-                        } else {
-                            logMsg(state, "层级解码失败：" + error);
-                        }
-
-                        // Cleanup temp
-                        try { std::filesystem::remove(fsPathFromUtf8(pngPath)); } catch (...) {}
-                        try { std::filesystem::remove(fsPathFromUtf8(narrowPath)); } catch (...) {}
-                    }
-                }
-            }
-        }
-
-        ImGui::EndChild();
-    }
-
 }
