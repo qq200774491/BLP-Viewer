@@ -1,210 +1,45 @@
-[![](https://dcbadge.limes.pink/api/server/https://discord.gg/CNeQmXAgVq)](https://discord.gg/CNeQmXAgVq)
+# BLP Viewer / 图像快速处理工具
 
-[Русская версия документации](README.ru.md)
+Windows 下的 BLP（暴雪纹理格式，War3）查看与批量转换工具：
+Dear ImGui + DirectX11 前端，支持 BLP / PNG / JPG / BMP / TGA 预览、Alpha 显示、
+拖拽批量互转，并附带资源管理器缩略图 shell 扩展。
 
-# blp-lib
+BLP 编解码为内置 C++ 实现（`gui/src/blp/blp_codec.*`）：
 
-Rust library for working with BLP files (Blizzard texture format) with C/C++ interface for use in other projects.
+- **解码**：BLP1 调色板（1/4/8-bit alpha）与 JPEG-content 两种变体，带 mip 级回退容错
+- **编码**：JPEG-content BLP1（libjpeg-turbo），完整 mipmap 链，quality 0–100
+- 不支持 BLP2（WoW）
 
-## Description
+## 构建
 
-This library provides a C-compatible API for working with BLP files, using the Rust crate [blp](https://crates.io/crates/blp). Supports loading BLP files from data buffer or filesystem and converting them to RGBA format.
+需要 Visual Studio（x64）与 CMake：
 
-## GUI (Viewer + Batch Converter)
-
-See `gui/README.md` for a Dear ImGui + DirectX11 front-end that previews BLP files, shows alpha,
-and batch converts between BMP/JPG/PNG/TGA/BLP with drag & drop.
-
-## Compilation
-
-```bash
-cargo build --release
+```powershell
+.\gui\build.ps1 -Config Release
 ```
 
-After compilation, local artifacts are placed in `target/release` (crate name based):
-- `libblp_lib.a` - static library
-- `libblp_lib.dylib` (macOS) / `libblp_lib.so` (Linux) / `blp_lib.dll` (Windows) - dynamic library
+产物在 `gui/build/Release/`：`blp_viewer.exe`、`blp_thumbnail.dll`（缩略图 shell 扩展）。
+依赖均已 vendored（`gui/third_party/`：imgui、stb、turbojpeg 预编译静态库），无需额外安装。
 
-For cross-platform, ready-to-ship artifacts with simplified names, use the distribution builder below.
+## 测试
 
-## Cross-Platform Distribution
-
-Use `./build-only.sh` to create distribution packages for all platforms:
-
-### macOS (Universal Binary)
-- `libblp-macos.a` - static library (arm64 + x86_64)
-- `libblp-macos.dylib` - dynamic library (arm64 + x86_64)
-
-### Windows
-- `libblp-windows.a` - static library
-- `blp-windows.dll` - dynamic library
-
-### Linux
-- `libblp-linux.a` - static library (musl)
-
-### Header File
-- `blp.h` - C/C++ header file (cross-platform)
-
-## Usage
-
-### C/C++
-
-Header files:
-- Local developer build: include `include/blp_lib.h`
-- Distribution build: include `dist/blp.h`
-
-Example of loading a BLP file:
-```c
-#include <stdio.h>
-#include <stdlib.h>
-#include "blp.h"
-
-int main() {
-    BlpImage image;
-    BlpResult result = blp_load_from_file("texture.blp", &image);
-    
-    if (result == BLP_SUCCESS) {
-        printf("Loaded image %dx%d, data size: %d bytes\n", 
-               image.width, image.height, image.data_len);
-        
-        // Use image.data (RGBA format)
-        
-        // Don't forget to free memory
-        blp_free_image(&image);
-    } else {
-        printf("Error loading BLP file: %d\n", result);
-    }
-    
-    return 0;
-}
+```powershell
+.\gui\build\Release\blp_codec_selftest.exe test-data\blp test-data\png
 ```
 
-### Compiling C Project
+对 `test-data/` 下的样本做解码回归（与参考 PNG 比 PSNR）和编码往返验证。
 
-#### Using Local Build
-```bash
-# Static linking (recommended for simple tests)
-gcc -I./include -L./target/release your_program.c -o your_program -lblp_lib
+## 安装包
+
+需要 Inno Setup 6：
+
+```powershell
+.\gui\installer\build_installer.ps1 -Config Release
 ```
 
-#### Using Distribution Build
+输出 `gui/installer/dist/BLP_Viewer_Setup_x64.exe`。
 
-**macOS:**
-```bash
-gcc -I./dist -L./dist your_program.c -o your_program -lblp-macos -ldl
-```
+## 历史
 
-**Linux:**
-```bash
-gcc -I./dist -L./dist your_program.c -o your_program -lblp-linux -ldl -lpthread
-```
-
-**Windows:**
-```bash
-# Using MinGW (static)
-gcc -I./dist -L./dist your_program.c -o your_program.exe -lblp-windows
-```
-
-## API
-
-Note on mipmaps:
-- By default, decoding loads only the base (top) mip for performance.
-- Encoding APIs let you specify how many mip levels to generate or pass explicit flags.
-
-### Structures
-
-#### `BlpImage`
-Structure for storing BLP image data:
-- `uint32_t width` - image width
-- `uint32_t height` - image height  
-- `uint8_t* data` - pointer to data in RGBA format
-- `uint32_t data_len` - data size in bytes
-
-#### `BlpResult`
-Operation result codes:
-- `BLP_SUCCESS = 0` - operation completed successfully
-- `BLP_INVALID_INPUT = -1` - invalid input parameters
-- `BLP_PARSE_ERROR = -2` - BLP file parsing error
-- `BLP_MEMORY_ERROR = -3` - memory allocation error
-- `BLP_UNKNOWN_ERROR = -99` - unknown error
-
-### Functions
-
-#### `blp_load_from_buffer(data, data_len, out_image)`
-Loads BLP file from data buffer into memory.
-
-**Parameters:**
-- `const uint8_t* data` - pointer to BLP file data
-- `uint32_t data_len` - data length in bytes
-- `BlpImage* out_image` - pointer to structure for storing result
-
-**Returns:** `BlpResult`
-
-#### `blp_load_from_file(filename, out_image)`
-Loads BLP file from filesystem.
-
-**Parameters:**
-- `const char* filename` - path to BLP file
-- `BlpImage* out_image` - pointer to structure for storing result
-
-**Returns:** `BlpResult`
-
-#### `blp_free_image(image)`
-Frees memory allocated for `BlpImage`.
-
-**Parameters:**
-- `BlpImage* image` - pointer to structure to free
-
-#### `blp_get_version()`
-Returns library version string.
-
-**Returns:** `const char*` - pointer to version string
-
-#### `blp_is_valid(data, data_len)`
-Checks if data buffer is a valid BLP file.
-
-**Parameters:**
-- `const uint8_t* data` - pointer to data to check
-- `uint32_t data_len` - data length in bytes
-
-**Returns:** `int` - 1 if valid BLP, 0 otherwise
-
-### Encoding functions
-
-Generate BLP from a source image (PNG/JPEG/etc.):
-
-- `blp_encode_file_to_blp(input_path, output_path, quality, mip_count)`
-    - Create a BLP with the first `mip_count` levels (min 1). `quality` is 0..100.
-
-- `blp_encode_file_to_blp_with_flags(input_path, output_path, quality, mip_flags, mip_flags_len)`
-    - `mip_flags` is an array of 0/1 values, each enabling a mip level by index.
-
-- `blp_encode_bytes_to_blp(image_bytes, image_len, output_path, quality, mip_count)`
-    - Encode image content already in memory.
-
-- `blp_encode_bytes_to_blp_with_flags(image_bytes, image_len, output_path, quality, mip_flags, mip_flags_len)`
-    - Same as above, but with explicit mip visibility flags.
-
-### Decode / Extract helpers
-
-- `blp_decode_mip_to_png_from_file(blp_path, mip_index, output_png_path)`
-    - Decode selected mip into a PNG file. Loads only the requested mip.
-
-- `blp_decode_mip_to_png_from_buffer(blp_bytes, blp_len, mip_index, output_png_path)`
-    - Same as above, but takes the .blp data from memory.
-
-- `blp_extract_mip_to_jpg_from_file(blp_path, mip_index, output_jpg_path)`
-    - For JPEG-BLP: extract raw JPEG stream of the chosen mip without decoding.
-
-- `blp_extract_mip_to_jpg_from_buffer(blp_bytes, blp_len, mip_index, output_jpg_path)`
-    - Same as above for in-memory .blp data.
-
-## Testing
-
-```bash
-cargo test
-```
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/WarRaft/blp-lib/refs/heads/main/preview/logo.png" alt="BLP"/>
-</p>
+本项目早期通过 Rust `blp` crate（blp_lib.dll）提供编解码，已在 2026-06 替换为内置
+C++ 实现以缩减体积与依赖；Rust 实现可在 git 历史中找到。
