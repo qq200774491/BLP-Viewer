@@ -204,19 +204,55 @@ std::optional<RawImage> decodeJpeg(const uint8_t* data, size_t size,
     const size_t pixelCount = static_cast<size_t>(imgWidth) * imgHeight;
     image.rgba.resize(pixelCount * 4);
 
-    // TJPF_CMYK：不做色彩空间转换，直接输出原始 4 字节（BLP 内实际是 BGRA）
-    if (tjDecompress2(tjHandle, jpegData.data(), static_cast<unsigned long>(jpegData.size()),
-                      image.rgba.data(), imgWidth, 0, imgHeight, TJPF_CMYK, 0) != 0) {
-        setError(outError, std::string("turbojpeg 解码失败: ") + tjGetErrorStr());
+    // BLP 内的 JPEG 按通道数有三种变体，均模拟 War3（jpeglib 直通 + 按 BGR(A) 解释）：
+    //   4 分量（暴雪标准）：CMYK 直通拿到 BGRA
+    //   3 分量（第三方工具，分量 ID 伪装成 'R','G','B' 触发直通）：拿到 BGR，无 alpha
+    //   1 分量：灰度
+    if (jpegColorspace == TJCS_CMYK || jpegColorspace == TJCS_YCCK) {
+        if (tjDecompress2(tjHandle, jpegData.data(), static_cast<unsigned long>(jpegData.size()),
+                          image.rgba.data(), imgWidth, 0, imgHeight, TJPF_CMYK, 0) != 0) {
+            setError(outError, std::string("turbojpeg 解码失败: ") + tjGetErrorStr());
+            tjDestroy(tjHandle);
+            return std::nullopt;
+        }
         tjDestroy(tjHandle);
-        return std::nullopt;
+        // BGRA → RGBA
+        for (size_t i = 0; i < pixelCount; ++i) {
+            std::swap(image.rgba[i * 4 + 0], image.rgba[i * 4 + 2]);
+        }
+    } else if (jpegColorspace == TJCS_GRAY) {
+        std::vector<uint8_t> gray(pixelCount);
+        if (tjDecompress2(tjHandle, jpegData.data(), static_cast<unsigned long>(jpegData.size()),
+                          gray.data(), imgWidth, 0, imgHeight, TJPF_GRAY, 0) != 0) {
+            setError(outError, std::string("turbojpeg 解码失败: ") + tjGetErrorStr());
+            tjDestroy(tjHandle);
+            return std::nullopt;
+        }
+        tjDestroy(tjHandle);
+        for (size_t i = 0; i < pixelCount; ++i) {
+            image.rgba[i * 4 + 0] = gray[i];
+            image.rgba[i * 4 + 1] = gray[i];
+            image.rgba[i * 4 + 2] = gray[i];
+            image.rgba[i * 4 + 3] = 255;
+        }
+    } else {
+        // TJCS_RGB（直通）或 TJCS_YCbCr（转换后）：War3 都按 BGR 解释
+        std::vector<uint8_t> bgr(pixelCount * 3);
+        if (tjDecompress2(tjHandle, jpegData.data(), static_cast<unsigned long>(jpegData.size()),
+                          bgr.data(), imgWidth, 0, imgHeight, TJPF_RGB, 0) != 0) {
+            setError(outError, std::string("turbojpeg 解码失败: ") + tjGetErrorStr());
+            tjDestroy(tjHandle);
+            return std::nullopt;
+        }
+        tjDestroy(tjHandle);
+        for (size_t i = 0; i < pixelCount; ++i) {
+            image.rgba[i * 4 + 0] = bgr[i * 3 + 2]; // R
+            image.rgba[i * 4 + 1] = bgr[i * 3 + 1]; // G
+            image.rgba[i * 4 + 2] = bgr[i * 3 + 0]; // B
+            image.rgba[i * 4 + 3] = 255;
+        }
     }
-    tjDestroy(tjHandle);
 
-    // BGRA → RGBA
-    for (size_t i = 0; i < pixelCount; ++i) {
-        std::swap(image.rgba[i * 4 + 0], image.rgba[i * 4 + 2]);
-    }
     return image;
 }
 
