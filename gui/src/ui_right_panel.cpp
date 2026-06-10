@@ -226,12 +226,42 @@ bool saveAlignedToSource(AppState& state, const std::vector<uint8_t>& rgba,
     }
     state.thumbCache.invalidate(outPath);
 
-    // Switch the working file to what we just wrote; register the new file in
-    // the resource list and select it so the list reflects the conversion.
+    // Switch the working file to what we just wrote. A format change replaces
+    // the source: delete the original file and swap the list entry in place,
+    // keeping an undo record for 恢复原图.
+    const std::string oldPath = state.currentPreviewPath;
     state.currentPreviewPath = outPath;
     if (formatChanged) {
-        if (!state.fileSet.count(outPath)) {
+        state.convertedFromPath = oldPath;
+        state.convertedFromBytes = state.originalFileBytes;
+        state.convertedToPath = outPath;
+
+        std::error_code removeEc;
+        if (!fs::remove(fsPathFromUtf8(oldPath), removeEc) || removeEc) {
+            logMsg(state, "原文件删除失败：" + oldPath);
+        }
+        state.thumbCache.invalidate(oldPath);
+
+        const bool newAlreadyListed = state.fileSet.count(outPath) != 0;
+        auto oldIt = std::find(state.fileList.begin(), state.fileList.end(), oldPath);
+        if (oldIt != state.fileList.end()) {
+            if (newAlreadyListed) {
+                state.fileList.erase(oldIt);
+            } else {
+                *oldIt = outPath;
+            }
+            state.fileSet.erase(oldPath);
+            auto relIt = state.relativePathMap.find(oldPath);
+            if (relIt != state.relativePathMap.end()) {
+                fs::path relPath = fsPathFromUtf8(relIt->second);
+                relPath.replace_extension("." + format);
+                state.relativePathMap.erase(relIt);
+                state.relativePathMap[outPath] = fsPathToUtf8(relPath);
+            }
+        } else if (!newAlreadyListed) {
             state.fileList.push_back(outPath);
+        }
+        if (!newAlreadyListed) {
             state.fileSet.insert(outPath);
         }
         auto it = std::find(state.fileList.begin(), state.fileList.end(), outPath);
@@ -461,21 +491,30 @@ void renderRightPanel(AppState& state) {
         int srcH = 0;
         if (!getActiveSource(&source, &srcW, &srcH)) return;
 
-        if (srcW == targetW && srcH == targetH) {
-            logMsg(state, "尺寸未变化，无需保存");
+        const bool sizeUnchanged = (srcW == targetW && srcH == targetH);
+        const bool formatChanged = (state.currentMeta.format != singleSaveFormatStr(state.outputFormat));
+        if (sizeUnchanged && !formatChanged) {
+            logMsg(state, "尺寸与输出格式均未变化，无需保存");
             return;
         }
 
-        std::vector<uint8_t> resized(static_cast<size_t>(targetW) * targetH * 4);
-        stbir_resize_uint8_linear(source->data(), srcW, srcH, srcW * 4,
-                                  resized.data(), targetW, targetH, targetW * 4, STBIR_RGBA);
         std::string error;
-        if (saveAlignedToSource(state, resized, targetW, targetH, &error)) {
+        bool saved = false;
+        if (sizeUnchanged) {
+            // 仅转换格式，不重采样
+            saved = saveAlignedToSource(state, *source, srcW, srcH, &error);
+        } else {
+            std::vector<uint8_t> resized(static_cast<size_t>(targetW) * targetH * 4);
+            stbir_resize_uint8_linear(source->data(), srcW, srcH, srcW * 4,
+                                      resized.data(), targetW, targetH, targetW * 4, STBIR_RGBA);
+            saved = saveAlignedToSource(state, resized, targetW, targetH, &error);
+        }
+        if (saved) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), "%s：%d x %d", successPrefix, targetW, targetH);
             logMsg(state, msg);
         } else {
-            logMsg(state, "调整尺寸失败：" + error);
+            logMsg(state, "保存失败：" + error);
         }
     };
 
@@ -672,12 +711,53 @@ void renderRightPanel(AppState& state) {
             }
             PopButtonStyle();
             ImGui::SameLine();
-            const bool canRestore = state.previewAdjusted && state.hasOriginalBackup;
+            // 跨格式撤销：当前文件正是上次格式转换的产物时，可整体还原
+            const bool convertedRestore = !state.convertedFromBytes.empty() &&
+                                          state.currentPreviewPath == state.convertedToPath;
+            const bool canRestore = (state.previewAdjusted && state.hasOriginalBackup) || convertedRestore;
             if (!canRestore) ImGui::BeginDisabled();
             PushDangerButtonStyle();
             if (ImGui::Button("恢复原图")) {
                 std::string error;
-                if (writeFileBytes(state.currentPreviewPath, state.originalFileBytes, &error)) {
+                if (convertedRestore) {
+                    if (writeFileBytes(state.convertedFromPath, state.convertedFromBytes, &error)) {
+                        namespace fs = std::filesystem;
+                        std::error_code ec;
+                        fs::remove(fsPathFromUtf8(state.convertedToPath), ec);
+                        state.thumbCache.invalidate(state.convertedToPath);
+                        state.thumbCache.invalidate(state.convertedFromPath);
+
+                        // 列表条目换回原路径
+                        auto it = std::find(state.fileList.begin(), state.fileList.end(),
+                                            state.convertedToPath);
+                        const bool origListed = state.fileSet.count(state.convertedFromPath) != 0;
+                        if (it != state.fileList.end()) {
+                            if (origListed) {
+                                state.fileList.erase(it);
+                            } else {
+                                *it = state.convertedFromPath;
+                            }
+                            state.fileSet.erase(state.convertedToPath);
+                            state.relativePathMap.erase(state.convertedToPath);
+                        }
+                        if (!origListed) {
+                            state.fileSet.insert(state.convertedFromPath);
+                        }
+                        auto nit = std::find(state.fileList.begin(), state.fileList.end(),
+                                             state.convertedFromPath);
+                        if (nit != state.fileList.end()) {
+                            state.selectedFileIndex = static_cast<int>(nit - state.fileList.begin());
+                        }
+                        state.currentPreviewPath = state.convertedFromPath;
+                        state.convertedFromPath.clear();
+                        state.convertedFromBytes.clear();
+                        state.convertedToPath.clear();
+                        updatePreview(state, state.currentPreviewPath);
+                        logMsg(state, "已恢复原始文件");
+                    } else {
+                        logMsg(state, "恢复失败：" + error);
+                    }
+                } else if (writeFileBytes(state.currentPreviewPath, state.originalFileBytes, &error)) {
                     state.thumbCache.invalidate(state.currentPreviewPath);
                     state.currentMeta = state.originalMeta;
                     state.previewAdjusted = false;

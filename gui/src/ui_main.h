@@ -81,6 +81,12 @@ struct AppState {
     bool previewAdjusted = false;
     bool previewUseAlpha = false;
 
+    // Format-conversion undo record: single-image save that replaced the source
+    // file (png -> blp etc.). Survives the preview reload that follows the save.
+    std::string convertedFromPath;
+    std::vector<uint8_t> convertedFromBytes;
+    std::string convertedToPath;
+
     // RGBA data (CPU side)
     std::vector<uint8_t> previewOriginalRGBA;
     std::vector<uint8_t> previewAdjustedRGBA;

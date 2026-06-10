@@ -348,6 +348,18 @@ void renderStatusBar(AppState& state) {
         leftInfo = "未加载图像";
     }
 
+    // 最近一条操作消息（保存成功/失败等），任务面板移除后唯一的反馈出口
+    if (!state.logMessages.empty()) {
+        std::string last = state.logMessages.back();
+        constexpr size_t kMaxBytes = 96;
+        if (last.size() > kMaxBytes) {
+            size_t cut = kMaxBytes;
+            while (cut > 0 && (static_cast<unsigned char>(last[cut]) & 0xC0) == 0x80) --cut;
+            last = last.substr(0, cut) + "...";
+        }
+        leftInfo += "  |  " + last;
+    }
+
     struct StatusSegment {
         std::string text;
         bool colored = false;
