@@ -204,8 +204,8 @@ std::optional<RawImage> decodeJpeg(const uint8_t* data, size_t size,
     const size_t pixelCount = static_cast<size_t>(imgWidth) * imgHeight;
     image.rgba.resize(pixelCount * 4);
 
-    // BLP 内的 JPEG 按通道数有三种变体，均模拟 War3（jpeglib 直通 + 按 BGR(A) 解释）：
-    //   4 分量（暴雪标准）：CMYK 直通拿到 BGRA
+    // BLP1/JPEG 的像素语义按 War3/旧 blp crate 对齐：
+    //   4 分量（标准 War3 贴图）：用 CMYK/YCCK 直通拿到 4 个原始分量，再按 BGRA 解释
     //   3 分量（第三方工具，分量 ID 伪装成 'R','G','B' 触发直通）：拿到 BGR，无 alpha
     //   1 分量：灰度
     if (jpegColorspace == TJCS_CMYK || jpegColorspace == TJCS_YCCK) {
@@ -341,9 +341,21 @@ bool encodeJpegBlp1(const uint8_t* rgba, uint32_t width, uint32_t height,
     const int levels = std::clamp(mipCount, 1, fullLevels);
     const int tjQuality = std::clamp(quality, 1, 100);
 
-    tjhandle tjHandle = tjInitCompress();
+    tjhandle tjHandle = tj3Init(TJINIT_COMPRESS);
     if (!tjHandle) {
         setError(outError, "turbojpeg 初始化失败");
+        return false;
+    }
+    // 编码必须显式指定 TJCS_CMYK，这才是 War3 BLP1 JPEG-content 的正确布局：
+    // 4 个 JPEG 分量只作为 B/G/R/A 原始通道容器使用，不做 RGB<->CMYK 色彩转换。
+    // 如果使用旧 tjCompress2(TJPF_CMYK) 默认路径，libjpeg-turbo 会写成 Adobe/YCCK，
+    // 游戏读取时会出现明显偏色。TJSAMP_444 保持四个通道逐像素对应。
+    if (tj3Set(tjHandle, TJPARAM_QUALITY, tjQuality) != 0 ||
+        tj3Set(tjHandle, TJPARAM_SUBSAMP, TJSAMP_444) != 0 ||
+        tj3Set(tjHandle, TJPARAM_COLORSPACE, TJCS_CMYK) != 0 ||
+        tj3Set(tjHandle, TJPARAM_FASTDCT, 0) != 0) {
+        setError(outError, std::string("turbojpeg 参数设置失败: ") + tj3GetErrorStr(tjHandle));
+        tj3Destroy(tjHandle);
         return false;
     }
 
@@ -373,7 +385,8 @@ bool encodeJpegBlp1(const uint8_t* rgba, uint32_t width, uint32_t height,
             src = levelRgba.data();
         }
 
-        // RGBA → BGRA，按 TJPF_CMYK 直通压缩（与解码端严格互逆，War3 也按此布局读取）
+        // 标准 War3 BLP1 写法：RGBA 内存图转换为 JPEG 的 B/G/R/A 四分量。
+        // 这里不预乘 alpha、不反相；alpha 就是第 4 个分量。
         bgra.resize(pixelCount * 4);
         for (size_t i = 0; i < pixelCount; ++i) {
             bgra[i * 4 + 0] = src[i * 4 + 2];
@@ -383,18 +396,17 @@ bool encodeJpegBlp1(const uint8_t* rgba, uint32_t width, uint32_t height,
         }
 
         unsigned char* jpegBuf = nullptr;
-        unsigned long jpegSize = 0;
-        if (tjCompress2(tjHandle, bgra.data(), static_cast<int>(mipW), 0, static_cast<int>(mipH),
-                        TJPF_CMYK, &jpegBuf, &jpegSize, TJSAMP_444, tjQuality,
-                        TJFLAG_ACCURATEDCT) != 0) {
-            setError(outError, std::string("turbojpeg 编码失败: ") + tjGetErrorStr());
+        size_t jpegSize = 0;
+        if (tj3Compress8(tjHandle, bgra.data(), static_cast<int>(mipW), 0, static_cast<int>(mipH),
+                         TJPF_CMYK, &jpegBuf, &jpegSize) != 0) {
+            setError(outError, std::string("turbojpeg 编码失败: ") + tj3GetErrorStr(tjHandle));
             ok = false;
         } else {
             mipJpegs.emplace_back(jpegBuf, jpegBuf + jpegSize);
         }
-        if (jpegBuf) tjFree(jpegBuf);
+        if (jpegBuf) tj3Free(jpegBuf);
     }
-    tjDestroy(tjHandle);
+    tj3Destroy(tjHandle);
     if (!ok) return false;
 
     // 组装文件：156 字节头 + jpegHeaderSize(=0) + 逐 mip 完整 JPEG
