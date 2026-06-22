@@ -1,5 +1,7 @@
 # BLP Viewer
 
+[English](#blp-viewer) | [中文](#blp-viewer中文)
+
 Windows GUI tool for viewing and batch-converting BLP (Blizzard texture format, Warcraft III).
 
 Dear ImGui + Direct3D 11 frontend with a built-in C++ BLP1 codec.
