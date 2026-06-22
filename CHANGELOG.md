@@ -4,16 +4,15 @@
 
 ### Added
 
-- **Layer composite & border batch operations** — apply image overlays (with anchor, margin, scale, opacity) or solid borders to all files in the resource list at once; supports canvas-expand or inset border modes
-- **Preview toolbar: save with size / alignment** — save the previewed image at a custom resolution with alignment options (stretch, center on transparent background, etc.)
-- **Built-in C++ BLP1 codec** — replaced the external Rust `blp_lib.dll` dependency; codec is now statically compiled into the application, no side DLLs required
+- **Layer composite & border batch operations** — apply image overlays (anchor, margin, scale, opacity) or solid borders (canvas-expand or inset) to all files in the resource list at once
+- **Preview toolbar: save with size / alignment** — export the previewed image at a custom resolution with alignment options (stretch, center on transparent background, etc.)
+- **Built-in C++ BLP1 codec** — no longer depends on external `blp_lib.dll`; statically compiled, unzip and run
 - **Installer improvements** — bilingual (Chinese / English) setup wizard, desktop shortcut option, full uninstall cleanup
 
 ### Fixed
 
-- Single-image save now supports format conversion (e.g. BLP → PNG) and replaces the source file when saving back to the same path
-- War3 BLP JPEG encoding now correctly uses CMYK colour space, matching the original War3 encoder behaviour
-- BLP1 JPEG decoding now handles 3-component (RGB) and grayscale JPEG payloads in addition to the standard 4-component CMYK stream
+- Single-image save now supports format conversion (e.g. BLP → PNG) and correctly overwrites the source file when saving back to the same path
+- Fixed decoding failures on some War3 BLP files (CMYK colour space / 3-component / grayscale JPEG payloads)
 
 ---
 
@@ -31,18 +30,17 @@
 
 ## [1.5.0] - 2026-06-22
 
-### 新增
+### 新功能
 
-- **图层合成 / 边框批量处理** — 对资源列表中的全部图像批量执行图层叠加（支持锚点、边距、缩放、不透明度）或加边框（扩展画布 / 内描边）
-- **预览工具栏：保存尺寸 / 对齐** — 按指定分辨率和对齐方式（拉伸、居中透明背景等）保存当前预览图
-- **内置 C++ BLP1 编解码器** — 移除对外部 Rust `blp_lib.dll` 的依赖，编解码器静态编译进主程序，无需额外 DLL
-- **安装包完善** — 双语（中文 / 英文）安装界面、桌面快捷方式选项、完整卸载清理
+- **图层合成 / 边框批量处理** — 对资源列表中的全部图像一键叠加图层（锚点、边距、缩放、透明度）或加边框（扩展画布 / 内描边）
+- **预览工具栏：保存尺寸 / 对齐** — 按指定分辨率和对齐方式导出当前预览图
+- **编解码器完全内置（C++）** — 不再依赖外部 `blp_lib.dll`，直接解压即用
+- **安装包改进** — 双语安装界面、桌面快捷方式选项、卸载时完整清理
 
 ### 修复
 
-- 单图保存支持纯格式转换（如 BLP → PNG），保存回原路径时正确替换原文件
-- War3 BLP JPEG 编码现在正确使用 CMYK 色彩空间，与原版 War3 编码器行为一致
-- BLP1 JPEG 解码新增对 3 通道（RGB）和灰度 JPEG 负载的支持
+- 单图保存时支持格式转换（如 BLP → PNG），保存回原路径时正确覆盖原文件
+- 修复部分 War3 BLP 文件解码异常（CMYK 色彩空间 / 3 通道 / 灰度 JPEG）
 
 ---
 
