@@ -56,7 +56,8 @@ Win32/
 *.swp
 *.swo
 *~
-.claude/settings.local.json
+.claude/
+.cargo/
 
 # ========================
 # OS files
@@ -64,6 +65,11 @@ Win32/
 **/.DS_Store
 Thumbs.db
 desktop.ini
+
+# ========================
+# Test data
+# ========================
+test-data/
 
 # ========================
 # Temp / Logs
