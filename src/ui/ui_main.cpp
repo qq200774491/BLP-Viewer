@@ -147,7 +147,7 @@ void show_about_dialog(AppState& state) {
     }
 
     if (ImGui::BeginPopupModal("关于 图像快速处理工具", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("图像快速处理工具 1.4v - 小为");
+        ImGui::TextUnformatted("图像快速处理工具");
         ImGui::Separator();
         ImGui::TextUnformatted("版本：1.4");
         ImGui::TextUnformatted("作者：小为");
