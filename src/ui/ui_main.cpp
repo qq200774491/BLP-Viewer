@@ -150,7 +150,7 @@ void show_about_dialog(AppState& state) {
         ImGui::TextUnformatted("图像快速处理工具");
         ImGui::Separator();
         ImGui::TextUnformatted("版本：1.5");
-        ImGui::TextUnformatted("魔影游戏");
+        ImGui::TextUnformatted("花吃了阿九");
         ImGui::TextUnformatted("用于 BLP / DDS / PNG / JPG / BMP / TGA 的查看与转换工具。");
         ImGui::Text("BLP 编解码：%s（内置）", state.blpApi.version().c_str());
         ImGui::Spacing();
