@@ -48,7 +48,7 @@ struct AppState {
     int selectedFileIndex = -1;
 
     int  outputFormat = 0;  ///< 0=BLP 1=PNG 2=JPG 3=BMP 4=TGA 5=original 6=DDS
-    int  quality      = 100;
+    int  quality      = DEFAULT_IMAGE_QUALITY;
     bool overwrite    = false;
     bool recursive    = true;
     char inputDirBuf[1024]  = {};

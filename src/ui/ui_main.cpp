@@ -217,9 +217,9 @@ void render_menu_bar(AppState& state) {
             ImGui::TextUnformatted("非 BLP 输出质量");
             ImGui::SetNextItemWidth(160.0f * state.dpiScale);
             ImGui::SliderInt("质量##NonBlpQuality", &state.quality, 0, 100);
-            if (ImGui::MenuItem("重置为 100%")) {
-                state.quality = 100;
-            }
+        }
+        if (ImGui::MenuItem("恢复默认质量")) {
+            state.quality = DEFAULT_IMAGE_QUALITY;
         }
         ImGui::EndMenu();
     }
